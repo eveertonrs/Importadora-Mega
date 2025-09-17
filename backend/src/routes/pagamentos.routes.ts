@@ -1,11 +1,26 @@
+// src/routes/pagamentos.routes.ts
 import { Router } from "express";
 import { protect } from "../middleware/auth.middleware";
-import { getPagamentos, getPagamentoById, createPagamento, updatePagamento, deletePagamento, getSaldo, getHistorico } from "../controllers/pagamentos.controller";
+import {
+  getPagamentos,
+  getPagamentoById,
+  createPagamento,
+  updatePagamento,
+  deletePagamento,
+  getSaldo,
+  getHistorico,
+} from "../controllers/pagamentos.controller";
 
 const router = Router();
 
+// todas as rotas exigem autenticação
 router.use(protect);
 
+// rotas específicas por cliente (declare antes das genéricas)
+router.get("/:cliente_id/saldo", getSaldo);
+router.get("/:cliente_id/historico", getHistorico);
+
+// CRUD dos lançamentos (pagamentos)
 router.route("/")
   .get(getPagamentos)
   .post(createPagamento);
@@ -15,7 +30,8 @@ router.route("/:id")
   .put(updatePagamento)
   .delete(deletePagamento);
 
-router.get("/:cliente_id/saldo", protect, getSaldo);
-router.get("/:cliente_id/historico", protect, getHistorico);
+// Se preferir apenas POST no frontend, você pode habilitar estes aliases:
+// router.post("/:id/atualizar", updatePagamento);
+// router.post("/:id/excluir", deletePagamento);
 
 export default router;

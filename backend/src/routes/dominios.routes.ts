@@ -1,26 +1,42 @@
 ﻿import { Router } from "express";
-import { protect } from "../middleware/auth.middleware";
-import { getDominios, getDominioById, createDominio, updateDominio, deleteDominio, getDominioItens, createDominioItem, updateDominioItem, deleteDominioItem } from "../controllers/dominios.controller";
+import { protect, authorize } from "../middleware/auth.middleware";
+import {
+  getDominios,
+  getDominioById,
+  createDominio,
+  updateDominio,
+  deleteDominio,
+  getDominioItens,
+  createDominioItem,
+  updateDominioItem,
+  deleteDominioItem,
+} from "../controllers/dominios.controller";
 
 const router = Router();
 
 router.use(protect);
 
-router.route("/")
-  .get(getDominios)
-  .post(createDominio);
+// Domínios
+router
+  .route("/")
+  .get(authorize("admin", "financeiro", "vendedor"), getDominios)
+  .post(authorize("admin"), createDominio);
 
-router.route("/:id")
-  .get(getDominioById)
-  .put(updateDominio)
-  .delete(deleteDominio);
+router
+  .route("/:id")
+  .get(authorize("admin", "financeiro", "vendedor"), getDominioById)
+  .put(authorize("admin"), updateDominio)
+  .delete(authorize("admin"), deleteDominio);
 
-router.route("/:dominio_id/itens")
-  .get(getDominioItens)
-  .post(createDominioItem);
+// Itens do Domínio
+router
+  .route("/:dominio_id/itens")
+  .get(authorize("admin", "financeiro", "vendedor"), getDominioItens)
+  .post(authorize("admin"), createDominioItem);
 
-router.route("/:dominio_id/itens/:id")
-  .put(updateDominioItem)
-  .delete(deleteDominioItem);
+router
+  .route("/:dominio_id/itens/:id")
+  .put(authorize("admin"), updateDominioItem)
+  .delete(authorize("admin"), deleteDominioItem);
 
 export default router;

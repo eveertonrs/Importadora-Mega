@@ -9,16 +9,15 @@ const dominioSchema = z.object({
 });
 
 const dominioItemSchema = z.object({
-  dominio_id: z.number().int(),
   valor: z.string().min(1, "Valor é obrigatório"),
   codigo: z.string().optional(),
   ordem: z.number().int().default(0),
   ativo: z.boolean().default(true),
 });
 
-export const getDominios = async (req: Request, res: Response) => {
+export const getDominios = async (_req: Request, res: Response) => {
   try {
-    const result = await pool.request().query("SELECT * FROM dominios");
+    const result = await pool.request().query("SELECT * FROM dominios ORDER BY nome");
     res.json(result.recordset);
   } catch (error) {
     console.error("Erro ao buscar domínios:", error);
@@ -32,7 +31,7 @@ export const getDominioById = async (req: Request, res: Response) => {
   try {
     const result = await pool
       .request()
-      .input("id", id)
+      .input("id", +id)
       .query("SELECT * FROM dominios WHERE id = @id");
 
     if (result.recordset.length === 0) {
@@ -55,16 +54,19 @@ export const createDominio = async (req: Request, res: Response) => {
       .input("chave", data.chave)
       .input("nome", data.nome)
       .input("ativo", data.ativo)
-      .query(
-        `INSERT INTO dominios (chave, nome, ativo)
-         OUTPUT INSERTED.*
-         VALUES (@chave, @nome, @ativo)`
-      );
+      .query(`
+        INSERT INTO dominios (chave, nome, ativo)
+        OUTPUT INSERTED.*
+        VALUES (@chave, @nome, @ativo)
+      `);
 
     res.status(201).json(result.recordset[0]);
-  } catch (error) {
+  } catch (error: any) {
     if (error instanceof z.ZodError) {
       return res.status(400).json({ message: "Erro de validação", errors: error.errors });
+    }
+    if (error.number === 2627) {
+      return res.status(409).json({ message: "Chave já cadastrada" });
     }
     console.error("Erro ao criar domínio:", error);
     res.status(500).json({ message: "Erro interno no servidor" });
@@ -84,14 +86,16 @@ export const updateDominio = async (req: Request, res: Response) => {
       return res.status(400).json({ message: "Nenhum campo para atualizar" });
     }
 
-    const request = pool.request().input("id", id);
+    const request = pool.request().input("id", +id);
     Object.entries(data).forEach(([key, value]) => {
-      request.input(key, value);
+      request.input(key, value as any);
     });
 
-    const result = await request.query(
-      `UPDATE dominios SET ${fields} WHERE id = @id OUTPUT INSERTED.*`
-    );
+    const result = await request.query(`
+      UPDATE dominios SET ${fields}
+      OUTPUT INSERTED.*
+      WHERE id = @id
+    `);
 
     if (result.recordset.length === 0) {
       return res.status(404).json({ message: "Domínio não encontrado" });
@@ -112,7 +116,7 @@ export const deleteDominio = async (req: Request, res: Response) => {
   try {
     const result = await pool
       .request()
-      .input("id", id)
+      .input("id", +id)
       .query("DELETE FROM dominios WHERE id = @id");
 
     if (result.rowsAffected[0] === 0) {
@@ -131,8 +135,9 @@ export const getDominioItens = async (req: Request, res: Response) => {
   try {
     const result = await pool
       .request()
-      .input("dominio_id", dominio_id)
-      .query("SELECT * FROM dominio_itens WHERE dominio_id = @dominio_id");
+      .input("dominio_id", +dominio_id)
+      .query("SELECT * FROM dominio_itens WHERE dominio_id = @dominio_id ORDER BY ordem, valor");
+
     res.json(result.recordset);
   } catch (error) {
     console.error("Erro ao buscar itens do domínio:", error);
@@ -146,7 +151,7 @@ export const getDominioItemById = async (req: Request, res: Response) => {
   try {
     const result = await pool
       .request()
-      .input("id", id)
+      .input("id", +id)
       .query("SELECT * FROM dominio_itens WHERE id = @id");
 
     if (result.recordset.length === 0) {
@@ -167,21 +172,24 @@ export const createDominioItem = async (req: Request, res: Response) => {
 
     const result = await pool
       .request()
-      .input("dominio_id", dominio_id)
+      .input("dominio_id", +dominio_id)
       .input("valor", data.valor)
-      .input("codigo", data.codigo)
-      .input("ordem", data.ordem)
-      .input("ativo", data.ativo)
-      .query(
-        `INSERT INTO dominio_itens (dominio_id, valor, codigo, ordem, ativo)
-         OUTPUT INSERTED.*
-         VALUES (@dominio_id, @valor, @codigo, @ordem, @ativo)`
-      );
+      .input("codigo", data.codigo ?? null)
+      .input("ordem", data.ordem ?? 0)
+      .input("ativo", data.ativo ?? true)
+      .query(`
+        INSERT INTO dominio_itens (dominio_id, valor, codigo, ordem, ativo)
+        OUTPUT INSERTED.*
+        VALUES (@dominio_id, @valor, @codigo, @ordem, @ativo)
+      `);
 
     res.status(201).json(result.recordset[0]);
-  } catch (error) {
+  } catch (error: any) {
     if (error instanceof z.ZodError) {
       return res.status(400).json({ message: "Erro de validação", errors: error.errors });
+    }
+    if (error.number === 2627) {
+      return res.status(409).json({ message: "Já existe um item com este valor no domínio" });
     }
     console.error("Erro ao criar item do domínio:", error);
     res.status(500).json({ message: "Erro interno no servidor" });
@@ -201,14 +209,17 @@ export const updateDominioItem = async (req: Request, res: Response) => {
       return res.status(400).json({ message: "Nenhum campo para atualizar" });
     }
 
-    const request = pool.request().input("id", id).input("dominio_id", dominio_id);
+    const request = pool.request().input("id", +id).input("dominio_id", +dominio_id);
     Object.entries(data).forEach(([key, value]) => {
-      request.input(key, value);
+      request.input(key, value as any);
     });
 
-    const result = await request.query(
-      `UPDATE dominio_itens SET ${fields} WHERE id = @id AND dominio_id = @dominio_id OUTPUT INSERTED.*`
-    );
+    const result = await request.query(`
+      UPDATE dominio_itens
+      SET ${fields}
+      OUTPUT INSERTED.*
+      WHERE id = @id AND dominio_id = @dominio_id
+    `);
 
     if (result.recordset.length === 0) {
       return res.status(404).json({ message: "Item do domínio não encontrado" });
@@ -229,8 +240,8 @@ export const deleteDominioItem = async (req: Request, res: Response) => {
   try {
     const result = await pool
       .request()
-      .input("id", id)
-      .input("dominio_id", dominio_id)
+      .input("id", +id)
+      .input("dominio_id", +dominio_id)
       .query("DELETE FROM dominio_itens WHERE id = @id AND dominio_id = @dominio_id");
 
     if (result.rowsAffected[0] === 0) {

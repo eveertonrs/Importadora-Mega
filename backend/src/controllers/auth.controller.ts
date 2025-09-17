@@ -3,6 +3,7 @@ import jwt from "jsonwebtoken";
 import bcrypt from "bcryptjs";
 import { z } from "zod";
 import { pool } from "../db";
+import { Permissao } from "../middleware/auth.middleware";
 
 const loginSchema = z.object({
   email: z.string().email("Email inválido"),
@@ -13,52 +14,38 @@ const registerSchema = z.object({
   nome: z.string().min(1, "Nome é obrigatório"),
   email: z.string().email("Email inválido"),
   senha: z.string().min(6, "Senha deve ter no mínimo 6 caracteres"),
-  permissao: z.enum(["ADMIN", "USER"]).default("USER"),
+  permissao: z.enum(["admin", "financeiro", "vendedor"]).default("vendedor"),
 });
 
 export const login = async (req: Request, res: Response) => {
   try {
-    console.log("Iniciando login...");
     const { email, senha } = loginSchema.parse(req.body);
-    console.log("Email:", email);
-    console.log("Senha:", senha);
 
     const result = await pool
       .request()
       .input("email", email)
-      .query("SELECT id, nome, email, senha_hash, permissao FROM usuarios WHERE email = @email AND ativo = 1");
-
-    console.log("Resultado da query:", result);
+      .query(
+        "SELECT id, nome, email, senha_hash, permissao FROM usuarios WHERE email = @email AND ativo = 1"
+      );
 
     if (result.recordset.length === 0) {
-      console.log("Credenciais inválidas: Usuário não encontrado");
       return res.status(401).json({ message: "Credenciais inválidas" });
     }
 
     const user = result.recordset[0];
+    const ok = await bcrypt.compare(senha, user.senha_hash);
+    if (!ok) return res.status(401).json({ message: "Credenciais inválidas" });
 
-    const isPasswordValid = await bcrypt.compare(senha, user.senha_hash);
+    const secret = process.env.JWT_SECRET as string;
 
-    console.log("Senha válida:", isPasswordValid);
-
-    if (!isPasswordValid) {
-      console.log("Credenciais inválidas: Senha incorreta");
-      return res.status(401).json({ message: "Credenciais inválidas" });
-    }
+    // normaliza a role antes de assinar o token
+    const permissao = (user.permissao as string).toLowerCase() as Permissao;
 
     const token = jwt.sign(
-      {
-        id: user.id,
-        nome: user.nome,
-        permissao: user.permissao,
-      },
-      process.env.JWT_SECRET!,
-      {
-        expiresIn: "1d",
-      }
+      { id: user.id, nome: user.nome, permissao },
+      secret,
+      { expiresIn: "1d" }
     );
-
-    console.log("Token gerado:", token);
 
     res.json({
       token,
@@ -66,14 +53,11 @@ export const login = async (req: Request, res: Response) => {
         id: user.id,
         nome: user.nome,
         email: user.email,
-        permissao: user.permissao,
+        permissao,
       },
     });
-
-    console.log("Login finalizado com sucesso!");
   } catch (error) {
     if (error instanceof z.ZodError) {
-      console.log("Erro de validação:", error.errors);
       return res.status(400).json({ message: "Erro de validação", errors: error.errors });
     }
     console.error("Erro no login:", error);
@@ -86,17 +70,18 @@ export const register = async (req: Request, res: Response) => {
     const data = registerSchema.parse(req.body);
 
     const senha_hash = await bcrypt.hash(data.senha, 10);
+    const permissao = data.permissao.toLowerCase() as Permissao;
 
     const result = await pool
       .request()
       .input("nome", data.nome)
       .input("email", data.email)
       .input("senha_hash", senha_hash)
-      .input("permissao", data.permissao)
+      .input("permissao", permissao)
       .query(
-        `INSERT INTO usuarios (nome, email, senha_hash, permissao)
-         OUTPUT INSERTED.*
-         VALUES (@nome, @email, @senha_hash, @permissao)`
+        `INSERT INTO usuarios (nome, email, senha_hash, permissao, ativo)
+         OUTPUT INSERTED.id, INSERTED.nome, INSERTED.email, INSERTED.permissao
+         VALUES (@nome, @email, @senha_hash, @permissao, 1)`
       );
 
     res.status(201).json({

@@ -1,13 +1,14 @@
 import { Router } from "express";
-import { protect } from "../middleware/auth.middleware";
+import { protect, authorize } from "../middleware/auth.middleware";
 import { getCheques, liquidarCheque, devolverCheque } from "../controllers/cheques.controller";
 
 const router = Router();
 
 router.use(protect);
 
-router.get("/", getCheques);
-router.post("/:id/liquidar", liquidarCheque);
-router.post("/:id/devolver", devolverCheque);
+router.get("/", authorize("admin", "financeiro"), getCheques);
+
+router.post("/:id/liquidar", authorize("admin", "financeiro"), liquidarCheque);
+router.post("/:id/devolver", authorize("admin", "financeiro"), devolverCheque);
 
 export default router;

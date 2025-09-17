@@ -11,26 +11,22 @@ export const getCheques = async (req: Request, res: Response) => {
     const { status } = getChequesSchema.parse(req.query);
 
     let query = `
-      SELECT bl.*, c.nome_fantasia 
+      SELECT bl.*, c.nome_fantasia, b.cliente_id, b.codigo AS codigo_bloco
       FROM bloco_lancamentos bl
       JOIN blocos b ON bl.bloco_id = b.id
       JOIN clientes c ON b.cliente_id = c.id
-      WHERE bl.tipo_recebimento IN ('PROPRIO', 'TERCEIRO')
+      WHERE bl.tipo_recebimento = 'CHEQUE'
     `;
-    
-    const params: any[] = [];
+
+    const request = pool.request();
     if (status) {
       query += " AND bl.status = @status";
-      params.push({ name: "status", value: status });
+      request.input("status", status);
     }
 
     query += " ORDER BY bl.bom_para ASC";
 
-    const request = pool.request();
-    params.forEach(p => request.input(p.name, p.value));
-
     const result = await request.query(query);
-
     res.json(result.recordset);
   } catch (error) {
     if (error instanceof z.ZodError) {
@@ -46,13 +42,13 @@ export const liquidarCheque = async (req: Request, res: Response) => {
   try {
     const result = await pool
       .request()
-      .input("id", id)
-      .query(
-        `UPDATE bloco_lancamentos 
-         SET status = 'LIQUIDADO' 
-         OUTPUT INSERTED.* 
-         WHERE id = @id AND tipo_recebimento IN ('PROPRIO', 'TERCEIRO')`
-      );
+      .input("id", +id)
+      .query(`
+        UPDATE bloco_lancamentos
+        SET status = 'LIQUIDADO'
+        OUTPUT INSERTED.*
+        WHERE id = @id AND tipo_recebimento = 'CHEQUE'
+      `);
 
     if (result.recordset.length === 0) {
       return res.status(404).json({ message: "Lançamento de cheque não encontrado" });
@@ -70,13 +66,13 @@ export const devolverCheque = async (req: Request, res: Response) => {
   try {
     const result = await pool
       .request()
-      .input("id", id)
-      .query(
-        `UPDATE bloco_lancamentos 
-         SET status = 'DEVOLVIDO' 
-         OUTPUT INSERTED.* 
-         WHERE id = @id AND tipo_recebimento IN ('PROPRIO', 'TERCEIRO')`
-      );
+      .input("id", +id)
+      .query(`
+        UPDATE bloco_lancamentos
+        SET status = 'DEVOLVIDO'
+        OUTPUT INSERTED.*
+        WHERE id = @id AND tipo_recebimento = 'CHEQUE'
+      `);
 
     if (result.recordset.length === 0) {
       return res.status(404).json({ message: "Lançamento de cheque não encontrado" });

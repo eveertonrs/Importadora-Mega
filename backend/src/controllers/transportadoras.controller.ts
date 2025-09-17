@@ -12,9 +12,9 @@ const transportadoraSchema = z.object({
   ativo: z.boolean().default(true),
 });
 
-export const getTransportadoras = async (req: Request, res: Response) => {
+export const getTransportadoras = async (_req: Request, res: Response) => {
   try {
-    const result = await pool.request().query("SELECT * FROM transportadoras");
+    const result = await pool.request().query("SELECT * FROM transportadoras ORDER BY razao_social");
     res.json(result.recordset);
   } catch (error) {
     console.error("Erro ao buscar transportadoras:", error);
@@ -28,7 +28,7 @@ export const getTransportadoraById = async (req: Request, res: Response) => {
   try {
     const result = await pool
       .request()
-      .input("id", id)
+      .input("id", +id)
       .query("SELECT * FROM transportadoras WHERE id = @id");
 
     if (result.recordset.length === 0) {
@@ -49,17 +49,17 @@ export const createTransportadora = async (req: Request, res: Response) => {
     const result = await pool
       .request()
       .input("razao_social", data.razao_social)
-      .input("cnpj", data.cnpj)
-      .input("forma_envio", data.forma_envio)
-      .input("telefone", data.telefone)
-      .input("endereco", data.endereco)
-      .input("referencia", data.referencia)
-      .input("ativo", data.ativo)
-      .query(
-        `INSERT INTO transportadoras (razao_social, cnpj, forma_envio, telefone, endereco, referencia, ativo)
-         OUTPUT INSERTED.*
-         VALUES (@razao_social, @cnpj, @forma_envio, @telefone, @endereco, @referencia, @ativo)`
-      );
+      .input("cnpj", data.cnpj ?? null)
+      .input("forma_envio", data.forma_envio ?? null)
+      .input("telefone", data.telefone ?? null)
+      .input("endereco", data.endereco ?? null)
+      .input("referencia", data.referencia ?? null)
+      .input("ativo", data.ativo ?? true)
+      .query(`
+        INSERT INTO transportadoras (razao_social, cnpj, forma_envio, telefone, endereco, referencia, ativo)
+        OUTPUT INSERTED.*
+        VALUES (@razao_social, @cnpj, @forma_envio, @telefone, @endereco, @referencia, @ativo)
+      `);
 
     res.status(201).json(result.recordset[0]);
   } catch (error) {
@@ -84,14 +84,16 @@ export const updateTransportadora = async (req: Request, res: Response) => {
       return res.status(400).json({ message: "Nenhum campo para atualizar" });
     }
 
-    const request = pool.request().input("id", id);
+    const request = pool.request().input("id", +id);
     Object.entries(data).forEach(([key, value]) => {
-      request.input(key, value);
+      request.input(key, value ?? null);
     });
 
-    const result = await request.query(
-      `UPDATE transportadoras SET ${fields} WHERE id = @id OUTPUT INSERTED.*`
-    );
+    const result = await request.query(`
+      UPDATE transportadoras SET ${fields}
+      OUTPUT INSERTED.*
+      WHERE id = @id
+    `);
 
     if (result.recordset.length === 0) {
       return res.status(404).json({ message: "Transportadora não encontrada" });
@@ -112,7 +114,7 @@ export const deleteTransportadora = async (req: Request, res: Response) => {
   try {
     const result = await pool
       .request()
-      .input("id", id)
+      .input("id", +id)
       .query("DELETE FROM transportadoras WHERE id = @id");
 
     if (result.rowsAffected[0] === 0) {

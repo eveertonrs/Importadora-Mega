@@ -1,212 +1,219 @@
-import React, { useState } from 'react';
-import axios from 'axios';
+// src/components/ClienteForm.tsx
+import React, { useState } from "react";
+import axios from "axios";
+
+const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:3333";
 
 const ClienteForm: React.FC = () => {
-  const [nomeFantasia, setNomeFantasia] = useState('');
-  const [cnpjCpf, setCnpjCpf] = useState('');
-  const [whatsapp, setWhatsapp] = useState<string>('');
-  const [formaPagamento, setFormaPagamento] = useState('');
-  const [entrega, setEntrega] = useState('');
-  const [tipoTabela, setTipoTabela] = useState('');
-  const [razaoSocialNF, setRazaoSocialNF] = useState('');
-  const [cnpjCpfNF, setCnpjCpfNF] = useState('');
-  const [tipoNota, setTipoNota] = useState('');
+  // colunas reais da tabela `clientes`
+  const [nomeFantasia, setNomeFantasia] = useState("");
+  const [grupoEmpresa, setGrupoEmpresa] = useState("");
+  const [tabelaPreco, setTabelaPreco] = useState("");
+  const [whatsapp, setWhatsapp] = useState("");
+  const [anotacoes, setAnotacoes] = useState("");
+
+  // opcional: criar documento principal (CPF/CNPJ) após criar o cliente
+  const [docNumero, setDocNumero] = useState("");
+
   const [error, setError] = useState<string | null>(null);
+  const [okMsg, setOkMsg] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+
+  const onlyDigits = (s: string) => s.replace(/\D+/g, "");
+  const inferDocTipo = (val: string): "CPF" | "CNPJ" | null => {
+    const d = onlyDigits(val);
+    if (d.length === 11) return "CPF";
+    if (d.length === 14) return "CNPJ";
+    return null;
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setError(null);
+    setOkMsg(null);
+
+    if (!nomeFantasia.trim()) {
+      setError("Informe o Nome Fantasia.");
+      return;
+    }
+    if (!tabelaPreco) {
+      setError("Selecione a Tabela de Preço.");
+      return;
+    }
+
     try {
-      const token = localStorage.getItem('token');
-      await axios.post('http://localhost:3333/clientes', {
-        nome_fantasia: nomeFantasia,
-        cnpj_cpf: cnpjCpf,
-        whatsapp: whatsapp,
-        forma_pagamento: formaPagamento,
-        entrega: entrega,
-        tipo_tabela: tipoTabela,
-        razao_social_nf: razaoSocialNF,
-        cnpj_cpf_nf: cnpjCpfNF,
-        tipo_nota: tipoNota,
-      }, {
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-      });
-      alert('Cliente cadastrado com sucesso!');
-      setNomeFantasia('');
-      setCnpjCpf('');
-      setWhatsapp('');
-      setFormaPagamento('');
-      setEntrega('');
-      setTipoTabela('');
-      setRazaoSocialNF('');
-      setCnpjCpfNF('');
-      setTipoNota('');
-      setError(null);
-    } catch (err: any) {
-      if (axios.isAxiosError(err) && err.response) {
-        setError(err.response.data.message || 'Erro ao cadastrar cliente');
-      } else {
-        setError('Ocorreu um erro. Tente novamente.');
+      setSubmitting(true);
+      const token = localStorage.getItem("token");
+      if (!token) {
+        window.location.href = "/login";
+        return;
       }
-      console.error('Erro no cadastro de cliente:', err);
+
+      // 1) cria o cliente (apenas campos existentes no backend)
+      const createResp = await axios.post(
+        `${API_URL}/clientes`,
+        {
+          nome_fantasia: nomeFantasia,
+          grupo_empresa: grupoEmpresa || null,
+          tabela_preco: tabelaPreco,
+          // status tem default 'ATIVO' no banco — pode omitir
+          whatsapp: onlyDigits(whatsapp) || null,
+          anotacoes: anotacoes || null,
+          links_json: null, // se quiser, pode omitir também
+        },
+        { headers: { Authorization: `Bearer ${token}` } }
+      );
+
+      const created = createResp.data?.data ?? createResp.data;
+      const clienteId = created.id;
+
+      // 2) se informou CPF/CNPJ, cria o documento principal
+      const digits = onlyDigits(docNumero);
+      if (digits) {
+        const tipo = inferDocTipo(digits);
+        if (!tipo) {
+          setError(
+            "Documento inválido. Use 11 dígitos para CPF ou 14 para CNPJ."
+          );
+          return;
+        }
+        await axios.post(
+          `${API_URL}/clientes/${clienteId}/documentos`,
+          { doc_tipo: tipo, doc_numero: digits, principal: true },
+          { headers: { Authorization: `Bearer ${token}` } }
+        );
+      }
+
+      setOkMsg("Cliente cadastrado com sucesso!");
+      // limpa o formulário
+      setNomeFantasia("");
+      setGrupoEmpresa("");
+      setTabelaPreco("");
+      setWhatsapp("");
+      setAnotacoes("");
+      setDocNumero("");
+    } catch (err: any) {
+      if (axios.isAxiosError(err)) {
+        const data = err.response?.data as any;
+        if (Array.isArray(data?.errors) && data.errors.length) {
+          // erros do Zod no backend
+          setError(data.errors.map((e: any) => e.message).join(" | "));
+        } else if (data?.message) {
+          setError(data.message);
+        } else if (err.response?.status === 401) {
+          window.location.href = "/login";
+          return;
+        } else {
+          setError("Erro ao cadastrar cliente.");
+        }
+      } else {
+        setError("Ocorreu um erro. Tente novamente.");
+      }
+      console.error("Erro no cadastro de cliente:", err);
+    } finally {
+      setSubmitting(false);
     }
   };
 
   return (
-    <div className="bg-white shadow rounded-lg p-4">
-      <h2 className="text-xl font-semibold mb-4">Novo Cliente</h2>
-      {error && <p className="text-red-500">{error}</p>}
+    <div className="rounded-xl border bg-white p-4 shadow">
+      <h2 className="mb-4 text-xl font-semibold">Novo Cliente</h2>
+
+      {error && <p className="mb-3 text-sm text-red-600">Erro de validação: {error}</p>}
+      {okMsg && <p className="mb-3 text-sm text-green-600">{okMsg}</p>}
+
       <form onSubmit={handleSubmit} className="space-y-4">
         <div>
-          <label htmlFor="nome_fantasia" className="block text-gray-700 text-sm font-bold mb-2">
+          <label htmlFor="nome_fantasia" className="mb-1 block text-sm font-bold text-gray-700">
             Nome Fantasia
           </label>
           <input
-            type="text"
             id="nome_fantasia"
-            name="nome_fantasia"
-            className="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline"
+            className="w-full rounded border px-3 py-2"
             value={nomeFantasia}
             onChange={(e) => setNomeFantasia(e.target.value)}
           />
         </div>
+
         <div>
-          <label htmlFor="cnpjCpf" className="block text-gray-700 text-sm font-bold mb-2">
-            CNPJ/CPF Cliente
+          <label htmlFor="grupo_empresa" className="mb-1 block text-sm font-bold text-gray-700">
+            Grupo / Empresa
           </label>
           <input
-            type="text"
-            id="cnpjCpf"
-            className="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline"
-            value={cnpjCpf}
-            onChange={(e) => setCnpjCpf(e.target.value)}
+            id="grupo_empresa"
+            className="w-full rounded border px-3 py-2"
+            value={grupoEmpresa}
+            onChange={(e) => setGrupoEmpresa(e.target.value)}
           />
         </div>
+
         <div>
-          <label htmlFor="whatsapp" className="block text-gray-700 text-sm font-bold mb-2">
+          <label htmlFor="tabela_preco" className="mb-1 block text-sm font-bold text-gray-700">
+            Tabela de Preço
+          </label>
+          <select
+            id="tabela_preco"
+            className="w-full rounded border px-3 py-2"
+            value={tabelaPreco}
+            onChange={(e) => setTabelaPreco(e.target.value)}
+          >
+            <option value="">Selecione</option>
+            <option value="ESPECIAL">Especial</option>
+            <option value="ATACADAO">Atacadão</option>
+            {/* se preferir, carregue essas opções de /dominios */}
+          </select>
+        </div>
+
+        <div>
+          <label htmlFor="whatsapp" className="mb-1 block text-sm font-bold text-gray-700">
             WhatsApp
           </label>
           <input
-            type="text"
             id="whatsapp"
-            className="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline"
+            className="w-full rounded border px-3 py-2"
             value={whatsapp}
             onChange={(e) => setWhatsapp(e.target.value)}
+            placeholder="(apenas números)"
+            inputMode="numeric"
           />
         </div>
+
         <div>
-          <label htmlFor="formaPagamento" className="block text-gray-700 text-sm font-bold mb-2">
-            Forma de Pagamento
+          <label htmlFor="anotacoes" className="mb-1 block text-sm font-bold text-gray-700">
+            Anotações
           </label>
-          <select
-            id="formaPagamento"
-            className="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline"
-            value={formaPagamento}
-            onChange={(e) => setFormaPagamento(e.target.value)}
-          >
-            <option value="">Selecione a Forma de Pagamento</option>
-            <option value="BOLETO A VISTA - 01 DIAS">BOLETO A VISTA - 01 DIAS</option>
-            <option value="BOLETO A VISTA - 07 DIAS">BOLETO A VISTA - 07 DIAS</option>
-            <option value="BOLETO A VISTA - 15 DIAS">BOLETO A VISTA - 15 DIAS</option>
-            <option value="BOLETO PRAZO - 05/10/15/20 DIAS">BOLETO PRAZO - 05/10/15/20 DIAS</option>
-            <option value="BOLETO - 05/10/15/20 DIAS">BOLETO - 05/10/15/20 DIAS</option>
-            <option value="BOLETO 15 DIAS">BOLETO 15 DIAS</option>
-            <option value="BOLETO 30 DIAS">BOLETO 30 DIAS</option>
-            <option value="BOLETO 30/60">BOLETO 30/60</option>
-            <option value="BOLETO 30/45/60">BOLETO 30/45/60</option>
-            <option value="BOLETO 30/45/60/75">BOLETO 30/45/60/75</option>
-            <option value="BOLETO 30/45/60/75/90">BOLETO 30/45/60/75/90</option>
-            <option value="BOLETO 30/60/90">BOLETO 30/60/90</option>
-            <option value="BOLETO 30/60/90/120">BOLETO 30/60/90/120</option>
-            <option value="CHEQUE A VISTA">CHEQUE A VISTA</option>
-            <option value="CHEQUE NA ENTREGA - ATÉ 15 DIAS">CHEQUE NA ENTREGA - ATÉ 15 DIAS</option>
-            <option value="CHEQUE NA ENTREGA - ATÉ 30 DIAS">CHEQUE NA ENTREGA - ATÉ 30 DIAS</option>
-            <option value="CHEQUE NA ENTREGA - ATÉ 60 DIAS">CHEQUE NA ENTREGA - ATÉ 60 DIAS</option>
-            <option value="CHEQUE NA ENTREGA - ATÉ 90 DIAS">CHEQUE NA ENTREGA - ATÉ 90 DIAS</option>
-            <option value="CHEQUE NA ENTREGA - ATÉ 120 DIAS">CHEQUE NA ENTREGA - ATÉ 120 DIAS</option>
-            <option value="CHEQUE NA ENTREGA ( 30/60/90 DIAS )">CHEQUE NA ENTREGA ( 30/60/90 DIAS )</option>
-            <option value="CHEQUE NA ENTREGA ( DIAS IRREGULARES )">CHEQUE NA ENTREGA ( DIAS IRREGULARES )</option>
-            <option value="DEPOSITA DEPOIS QUE RECEBE A MERCADORIA">DEPOSITA DEPOIS QUE RECEBE A MERCADORIA</option>
-            <option value="DINHEIRO OU DEPÓSITO">DINHEIRO OU DEPÓSITO</option>
-            <option value="ENTREGA MERCADORIA E RECEBE CHEQUE TERCEIRO DEPOIS">ENTREGA MERCADORIA E RECEBE CHEQUE TERCEIRO DEPOIS</option>
-          </select>
+          <textarea
+            id="anotacoes"
+            className="w-full rounded border px-3 py-2"
+            rows={3}
+            value={anotacoes}
+            onChange={(e) => setAnotacoes(e.target.value)}
+          />
         </div>
-        <div>
-          <label htmlFor="entrega" className="block text-gray-700 text-sm font-bold mb-2">
-            Entrega
-          </label>
-          <select
-            id="entrega"
-            className="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline"
-            value={entrega}
-            onChange={(e) => setEntrega(e.target.value)}
-          >
-            <option value="">Selecione o Tipo de Entrega</option>
-            <option value="ENTREGAMOS">Entregamos</option>
-            <option value="RETIRADA">Retirada</option>
-            <option value="TRANSPORTADORA">Transportadora</option>
-          </select>
-        </div>
-        <div>
-          <label htmlFor="tipoTabela" className="block text-gray-700 text-sm font-bold mb-2">
-            Tipo de Tabela
-          </label>
-          <select
-            id="tipoTabela"
-            className="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline"
-            value={tipoTabela}
-            onChange={(e) => setTipoTabela(e.target.value)}
-          >
-            <option value="">Selecione o Tipo de Tabela</option>
-            <option value="ESPECIAL">Especial</option>
-            <option value="ATACADAO">Atacadao</option>
-          </select>
-        </div>
-        <div>
-          <label htmlFor="razaoSocialNF" className="block text-gray-700 text-sm font-bold mb-2">
-            Razão Social (Nota Fiscal)
+
+        <div className="border-t pt-4">
+          <h3 className="mb-2 text-sm font-semibold text-gray-700">
+            (Opcional) Criar documento principal agora
+          </h3>
+          <label htmlFor="doc" className="mb-1 block text-xs font-semibold uppercase text-gray-600">
+            CPF/CNPJ
           </label>
           <input
-            type="text"
-            id="razaoSocialNF"
-            className="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline"
-            value={razaoSocialNF}
-            onChange={(e) => setRazaoSocialNF(e.target.value)}
+            id="doc"
+            className="w-full rounded border px-3 py-2"
+            placeholder="Apenas números (11 p/ CPF, 14 p/ CNPJ)"
+            value={docNumero}
+            onChange={(e) => setDocNumero(e.target.value)}
+            inputMode="numeric"
           />
         </div>
-        <div>
-          <label htmlFor="cnpjCpfNF" className="block text-gray-700 text-sm font-bold mb-2">
-            CNPJ/CPF (Nota Fiscal)
-          </label>
-          <input
-            type="text"
-            id="cnpjCpfNF"
-            className="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline"
-            value={cnpjCpfNF}
-            onChange={(e) => setCnpjCpfNF(e.target.value)}
-          />
-        </div>
-        <div>
-          <label htmlFor="tipoNota" className="block text-gray-700 text-sm font-bold mb-2">
-            Tipo de Nota
-          </label>
-          <select
-            id="tipoNota"
-            className="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline"
-            value={tipoNota}
-            onChange={(e) => setTipoNota(e.target.value)}
-          >
-            <option value="">Selecione o Tipo de Nota</option>
-            <option value="CPF">CPF</option>
-            <option value="CNPJ">CNPJ</option>
-          </select>
-        </div>
+
         <button
           type="submit"
-          className="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded focus:outline-none focus:shadow-outline"
+          disabled={submitting}
+          className="rounded bg-blue-600 px-4 py-2 text-white hover:bg-blue-700 disabled:opacity-60"
         >
-          Salvar
+          {submitting ? "Salvando..." : "Salvar"}
         </button>
       </form>
     </div>
