@@ -1,198 +1,205 @@
 // src/components/Clientes.tsx
-import { useState, useEffect } from "react";
-import axios from "axios";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
-import ClienteForm from "./ClienteForm";
+import api from "../services/api";
 
-// ajuste os paths se sua pasta "ui" estiver em outro lugar
-import { Card, CardContent } from "./ui/card";
-import Button from "./ui/button";
-import Input from "./ui/input";
-import { Plus, Search } from "lucide-react";
-
-const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:3333";
-
-interface Cliente {
+type Cliente = {
   id: number;
   nome_fantasia: string;
-  grupo_empresa?: string | null;
-  tabela_preco: string | null;
-  status: "ATIVO" | "INATIVO";
+  tabela_preco?: string | null;
+  status?: "ATIVO" | "INATIVO";
   whatsapp?: string | null;
-  codigo_alfabetico?: string | null;
-}
-
-const isTokenExpired = (token: string): boolean => {
-  try {
-    const payloadBase64 = token.split(".")[1];
-    const payloadJson = atob(payloadBase64);
-    const payload = JSON.parse(payloadJson);
-    const expiry = payload.exp as number;
-    const now = Math.floor(Date.now() / 1000);
-    return expiry < now;
-  } catch {
-    return true;
-  }
 };
 
-const Clientes = () => {
-  const [clientes, setClientes] = useState<Cliente[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [showForm, setShowForm] = useState(false);
+export default function Clientes() {
+  const nav = useNavigate();
+
+  // filtros
   const [search, setSearch] = useState("");
-  const navigate = useNavigate();
+  const [status, setStatus] = useState<"" | "ATIVO" | "INATIVO">("");
 
-  const fetchClientes = async () => {
+  // dados/estado
+  const [rows, setRows] = useState<Cliente[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  // debounce simples (400ms)
+  const debounceMs = 400;
+  const timerRef = useRef<number | null>(null);
+  const debounced = useMemo(() => search.trim(), [search]);
+
+  async function load() {
+    setLoading(true);
+    setErr(null);
     try {
-      setLoading(true);
-      setError(null);
-
-      const token = localStorage.getItem("token");
-      if (!token || isTokenExpired(token)) {
-        navigate("/login");
-        return;
-      }
-
-      const response = await axios.get(`${API_URL}/clientes`, {
-        params: { search },
-        headers: { Authorization: `Bearer ${token}` },
+      const { data } = await api.get("/clientes", {
+        params: {
+          search: debounced || undefined,
+          status: status || undefined,
+        },
       });
-
-      // seu controller retorna { data, total, page, limit }
-      setClientes(response.data.data ?? []);
-    } catch (err) {
-      if (axios.isAxiosError(err)) {
-        if (err.response?.status === 401) {
-          navigate("/login");
-          return;
-        }
-        setError(err.response?.data?.message || "Erro ao buscar clientes");
-      } else if (err instanceof Error) {
-        setError(err.message);
-      } else {
-        setError("Erro desconhecido");
-      }
+      setRows(data?.data ?? data ?? []);
+    } catch (e: any) {
+      setErr(e?.response?.data?.message || "Falha ao carregar clientes.");
+      setRows([]);
     } finally {
       setLoading(false);
     }
-  };
+  }
 
+  // dispara busca com debounce quando search/status mudarem
   useEffect(() => {
-    fetchClientes();
+    if (timerRef.current) window.clearTimeout(timerRef.current);
+    timerRef.current = window.setTimeout(load, debounceMs);
+    return () => {
+      if (timerRef.current) window.clearTimeout(timerRef.current);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [search]);
-
-  if (loading) return <div className="py-10 text-center">Carregando...</div>;
-  if (error) return <div className="text-center text-red-600">{error}</div>;
+  }, [debounced, status]);
 
   return (
-    <div className="container mx-auto p-6">
-      <div className="mb-6 flex items-center justify-between">
-        <h2 className="text-3xl font-bold text-gray-800">Clientes</h2>
-        <Button
-          onClick={() => setShowForm(true)}
-          className="flex items-center gap-2 rounded bg-green-600 px-3 py-2 text-white hover:bg-green-700"
+    <div className="space-y-4">
+      {/* Header / Ações */}
+      <div className="flex flex-wrap items-end gap-2 justify-between">
+        <div>
+          <h1 className="text-xl font-semibold">Clientes</h1>
+          <p className="text-sm text-slate-500">Gerencie cadastro e acesso rápido aos blocos.</p>
+        </div>
+        <button
+          onClick={() => nav("/clientes/novo")}
+          className="px-3 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
         >
-          <Plus className="h-4 w-4" /> Novo Cliente
-        </Button>
+          Novo cliente
+        </button>
       </div>
 
-      <div className="mb-6 flex items-center gap-2">
-        <div className="relative w-full">
-          <Search className="absolute left-3 top-3 h-5 w-5 text-gray-400" />
-          <Input
-            type="text"
-            placeholder="Buscar cliente..."
-            className="w-full pl-10"
-            value={search}
-            onChange={(e: React.ChangeEvent<HTMLInputElement>) =>
-              setSearch(e.target.value)
-            }
-          />
+      {/* Filtros */}
+      <div className="rounded-xl border bg-white p-3 md:p-4 shadow-sm">
+        <div className="grid md:grid-cols-3 gap-3">
+          <div className="md:col-span-2">
+            <label className="text-sm text-slate-600">Buscar</label>
+            <input
+              className="mt-1 border rounded px-3 py-2 w-full focus:outline-none focus:ring-2 focus:ring-blue-200"
+              placeholder="Nome, WhatsApp…"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
+          </div>
+
+          <div>
+            <label className="text-sm text-slate-600">Status</label>
+            <select
+              className="mt-1 border rounded px-3 py-2 w-full focus:outline-none focus:ring-2 focus:ring-blue-200"
+              value={status}
+              onChange={(e) => setStatus((e.target.value as any) || "")}
+            >
+              <option value="">(todos)</option>
+              <option value="ATIVO">ATIVO</option>
+              <option value="INATIVO">INATIVO</option>
+            </select>
+          </div>
         </div>
       </div>
 
-      {showForm && (
-        <Card className="mb-6 shadow-lg">
-          <CardContent>
-            <ClienteForm />
-          </CardContent>
-        </Card>
-      )}
-
-      <Card className="shadow-lg">
-        <CardContent className="p-0">
-          <table className="min-w-full divide-y divide-gray-200">
-            <thead className="bg-blue-600">
-              <tr>
-                {[
-                  "Nome Fantasia",
-                  "WhatsApp",
-                  "Tabela de Preço",
-                  "Status",
-                  "Ações",
-                ].map((header) => (
-                  <th
-                    key={header}
-                    className="px-6 py-3 text-left text-xs font-semibold uppercase tracking-wider text-white"
-                  >
-                    {header}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-100 bg-white">
-              {clientes.length > 0 ? (
-                clientes.map((cliente) => (
-                  <tr
-                    key={cliente.id}
-                    className="transition-colors hover:bg-gray-50"
-                  >
-                    <td className="px-6 py-4 text-sm text-gray-800">
-                      {cliente.nome_fantasia}
+      {/* Lista */}
+      <div className="rounded-xl border bg-white overflow-hidden shadow-sm">
+        <table className="w-full text-sm">
+          <thead className="bg-slate-50">
+            <tr className="text-left">
+              <th className="p-2 border">#</th>
+              <th className="p-2 border">Nome fantasia</th>
+              <th className="p-2 border">Tabela</th>
+              <th className="p-2 border">Status</th>
+              <th className="p-2 border">Ações</th>
+            </tr>
+          </thead>
+          <tbody>
+            {loading && (
+              <>
+                {[...Array(4)].map((_, i) => (
+                  <tr key={`sk-${i}`}>
+                    <td className="p-2 border">
+                      <div className="h-4 w-8 bg-slate-100 animate-pulse rounded" />
                     </td>
-                    <td className="px-6 py-4 text-sm text-gray-600">
-                      {cliente.whatsapp || "—"}
+                    <td className="p-2 border">
+                      <div className="h-4 w-48 bg-slate-100 animate-pulse rounded" />
                     </td>
-                    <td className="px-6 py-4 text-sm text-gray-600">
-                      {cliente.tabela_preco || "—"}
+                    <td className="p-2 border">
+                      <div className="h-4 w-24 bg-slate-100 animate-pulse rounded" />
                     </td>
-                    <td className="px-6 py-4 text-sm text-gray-600">
-                      {cliente.status}
+                    <td className="p-2 border">
+                      <div className="h-5 w-20 bg-slate-100 animate-pulse rounded" />
                     </td>
-                    <td className="flex gap-3 px-6 py-4 text-sm">
-                      <Link
-                        to={`/clientes/${cliente.id}`}
-                        className="font-medium text-blue-600 hover:text-blue-800"
-                      >
-                        Detalhes
-                      </Link>
-                      <Link
-                        to={`/clientes/${cliente.id}/documentos`}
-                        className="font-medium text-green-600 hover:text-green-800"
-                      >
-                        Documentos
-                      </Link>
+                    <td className="p-2 border">
+                      <div className="h-4 w-24 bg-slate-100 animate-pulse rounded" />
                     </td>
                   </tr>
-                ))
-              ) : (
-                <tr>
-                  <td
-                    colSpan={5}
-                    className="px-6 py-10 text-center text-gray-500"
-                  >
-                    Nenhum cliente encontrado
+                ))}
+              </>
+            )}
+
+            {!loading && rows.length === 0 && (
+              <tr>
+                <td colSpan={5} className="p-6 text-center">
+                  {err ? (
+                    <div className="text-red-700">{err}</div>
+                  ) : (
+                    <div className="text-slate-500">
+                      Nada encontrado. Ajuste a busca ou{" "}
+                      <button
+                        onClick={() => nav("/clientes/novo")}
+                        className="text-blue-700 underline"
+                      >
+                        crie um cliente
+                      </button>
+                      .
+                    </div>
+                  )}
+                </td>
+              </tr>
+            )}
+
+            {!loading &&
+              rows.map((c) => (
+                <tr key={c.id} className="hover:bg-slate-50">
+                  <td className="p-2 border align-top">{c.id}</td>
+                  <td className="p-2 border align-top">
+                    <div className="font-medium">{c.nome_fantasia}</div>
+                    {c.whatsapp && (
+                      <div className="text-xs text-slate-500">{c.whatsapp}</div>
+                    )}
+                  </td>
+                  <td className="p-2 border align-top">{c.tabela_preco ?? "-"}</td>
+                  <td className="p-2 border align-top">
+                    <span
+                      className={[
+                        "inline-flex items-center px-2 py-0.5 rounded text-xs font-medium",
+                        c.status === "INATIVO"
+                          ? "bg-red-50 text-red-700 border border-red-200"
+                          : "bg-emerald-50 text-emerald-700 border border-emerald-200",
+                      ].join(" ")}
+                    >
+                      {c.status ?? "-"}
+                    </span>
+                  </td>
+                  <td className="p-2 border align-top">
+                    <div className="flex flex-wrap gap-2">
+                      <Link to={`/clientes/${c.id}`} className="text-blue-700 underline">
+                        Abrir
+                      </Link>
+                      <Link
+                        to={`/blocos?cliente=${c.id}`}
+                        className="text-emerald-700 underline"
+                      >
+                        Blocos
+                      </Link>
+                    </div>
                   </td>
                 </tr>
-              )}
-            </tbody>
-          </table>
-        </CardContent>
-      </Card>
+              ))}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
-};
-
-export default Clientes;
+}

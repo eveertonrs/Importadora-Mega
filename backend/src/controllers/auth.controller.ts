@@ -3,7 +3,7 @@ import jwt from "jsonwebtoken";
 import bcrypt from "bcryptjs";
 import { z } from "zod";
 import { pool } from "../db";
-import { Permissao } from "../middleware/auth.middleware";
+import type { Permissao, AuthenticatedRequest } from "../middleware/auth.middleware";
 
 const loginSchema = z.object({
   email: z.string().email("Email inválido"),
@@ -16,6 +16,14 @@ const registerSchema = z.object({
   senha: z.string().min(6, "Senha deve ter no mínimo 6 caracteres"),
   permissao: z.enum(["admin", "financeiro", "vendedor"]).default("vendedor"),
 });
+
+function signToken(payload: { id: number; nome: string; permissao: Permissao }) {
+  const secret = process.env.JWT_SECRET as string;
+  if (!secret) {
+    throw new Error("Configuração inválida do servidor (JWT_SECRET)");
+  }
+  return jwt.sign(payload, secret, { expiresIn: "1d" });
+}
 
 export const login = async (req: Request, res: Response) => {
   try {
@@ -36,16 +44,8 @@ export const login = async (req: Request, res: Response) => {
     const ok = await bcrypt.compare(senha, user.senha_hash);
     if (!ok) return res.status(401).json({ message: "Credenciais inválidas" });
 
-    const secret = process.env.JWT_SECRET as string;
-
-    // normaliza a role antes de assinar o token
     const permissao = (user.permissao as string).toLowerCase() as Permissao;
-
-    const token = jwt.sign(
-      { id: user.id, nome: user.nome, permissao },
-      secret,
-      { expiresIn: "1d" }
-    );
+    const token = signToken({ id: user.id, nome: user.nome, permissao });
 
     res.json({
       token,
@@ -60,6 +60,7 @@ export const login = async (req: Request, res: Response) => {
     if (error instanceof z.ZodError) {
       return res.status(400).json({ message: "Erro de validação", errors: error.errors });
     }
+    // eslint-disable-next-line no-console
     console.error("Erro no login:", error);
     res.status(500).json({ message: "Erro interno no servidor" });
   }
@@ -68,6 +69,14 @@ export const login = async (req: Request, res: Response) => {
 export const register = async (req: Request, res: Response) => {
   try {
     const data = registerSchema.parse(req.body);
+    const email = data.email.toLowerCase();
+
+    // verifica se já existe
+    const exists = await pool.request().input("email", email)
+      .query("SELECT 1 FROM usuarios WHERE email = @email");
+    if (exists.recordset.length > 0) {
+      return res.status(409).json({ message: "Email já cadastrado" });
+    }
 
     const senha_hash = await bcrypt.hash(data.senha, 10);
     const permissao = data.permissao.toLowerCase() as Permissao;
@@ -75,7 +84,7 @@ export const register = async (req: Request, res: Response) => {
     const result = await pool
       .request()
       .input("nome", data.nome)
-      .input("email", data.email)
+      .input("email", email)
       .input("senha_hash", senha_hash)
       .input("permissao", permissao)
       .query(
@@ -88,11 +97,44 @@ export const register = async (req: Request, res: Response) => {
       message: "Usuário criado com sucesso!",
       user: result.recordset[0],
     });
-  } catch (error) {
+  } catch (error: any) {
     if (error instanceof z.ZodError) {
       return res.status(400).json({ message: "Erro de validação", errors: error.errors });
     }
+    // violação de unique (2627/2601) – por garantia
+    if (error?.number === 2627 || error?.number === 2601) {
+      return res.status(409).json({ message: "Email já cadastrado" });
+    }
+    // eslint-disable-next-line no-console
     console.error("Erro no registro:", error);
+    res.status(500).json({ message: "Erro interno no servidor" });
+  }
+};
+
+export const me = async (req: AuthenticatedRequest, res: Response) => {
+  if (!req.user) return res.status(401).json({ message: "Acesso não autorizado" });
+  try {
+    // carrega dados “frescos” do banco (nome pode mudar, etc.)
+    const result = await pool
+      .request()
+      .input("id", req.user.id)
+      .query("SELECT id, nome, email, permissao, ativo FROM usuarios WHERE id = @id");
+
+    if (result.recordset.length === 0) {
+      return res.status(404).json({ message: "Usuário não encontrado" });
+    }
+
+    const u = result.recordset[0];
+    res.json({
+      id: u.id,
+      nome: u.nome,
+      email: u.email,
+      permissao: (u.permissao as string).toLowerCase() as Permissao,
+      ativo: Boolean(u.ativo),
+    });
+  } catch (error) {
+    // eslint-disable-next-line no-console
+    console.error("Erro em /auth/me:", error);
     res.status(500).json({ message: "Erro interno no servidor" });
   }
 };

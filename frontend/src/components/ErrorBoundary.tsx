@@ -1,78 +1,138 @@
 // src/components/ErrorBoundary.tsx
-import React, { Component, type ErrorInfo, type ReactNode } from "react";
-
-type Props = {
-  children: ReactNode;
-  /** Componente/elemento a exibir quando houver erro */
-  fallback?: ReactNode;
-  /** Ação ao clicar em "Tentar novamente" (por padrão recarrega a página) */
-  onReset?: () => void;
-};
+import React from "react";
+import { Link } from "react-router-dom";
 
 type State = {
   hasError: boolean;
-  error?: Error;
-  errorInfo?: ErrorInfo;
+  error?: any;
+  errorInfo?: { componentStack?: string } | null;
+  showDetails: boolean;
+  copied: boolean;
 };
 
-class ErrorBoundary extends Component<Props, State> {
-  state: State = { hasError: false };
+export default class ErrorBoundary extends React.Component<
+  React.PropsWithChildren,
+  State
+> {
+  constructor(props: any) {
+    super(props);
+    this.state = { hasError: false, errorInfo: null, showDetails: false, copied: false };
+  }
 
-  static getDerivedStateFromError(error: Error): State {
-    // Atualiza o estado para mostrar a UI de fallback
+  static getDerivedStateFromError(error: any) {
+    // Atualiza o estado para renderizar a UI de fallback
     return { hasError: true, error };
   }
 
-  componentDidCatch(error: Error, errorInfo: ErrorInfo) {
-    // Log centralizado: substitua por envio a um serviço (Sentry/LogRocket/etc)
-    console.error("ErrorBoundary caught an error:", error, errorInfo);
-    this.setState({ errorInfo });
+  componentDidCatch(error: any, info: any) {
+    // Log útil em dev/observabilidade
+    console.error("ErrorBoundary:", error, info);
+    this.setState({ errorInfo: info });
   }
 
-  private handleReset = () => {
-    if (this.props.onReset) {
-      this.props.onReset();
-    } else {
-      // fallback: recarrega a página
-      window.location.reload();
+  private handleReload = () => {
+    window.location.reload();
+  };
+
+  private handleBack = () => {
+    if (window.history.length > 1) window.history.back();
+    else this.handleReload();
+  };
+
+  private toggleDetails = () => {
+    this.setState((s) => ({ showDetails: !s.showDetails, copied: false }));
+  };
+
+  private copyDetails = async () => {
+    const { error, errorInfo } = this.state;
+    const payload = [
+      `Mensagem: ${String(error)}`,
+      error?.stack ? `\nStack:\n${error.stack}` : "",
+      errorInfo?.componentStack
+        ? `\nReact stack:\n${errorInfo.componentStack}`
+        : "",
+      `\nURL: ${window.location.href}`,
+      `UserAgent: ${navigator.userAgent}`,
+      `Quando: ${new Date().toISOString()}`,
+    ].join("\n");
+
+    try {
+      await navigator.clipboard.writeText(payload);
+      this.setState({ copied: true });
+    } catch {
+      this.setState({ copied: false });
     }
   };
 
   render() {
     if (this.state.hasError) {
-      if (this.props.fallback) return this.props.fallback;
-
-      // Fallback padrão com Tailwind (opcional)
       return (
-        <div className="min-h-[40vh] flex flex-col items-center justify-center p-6 text-center">
-          <h2 className="text-2xl font-semibold mb-2">Algo deu errado.</h2>
-          <p className="text-gray-600 mb-4">
-            Tente novamente. Se o problema persistir, contate o suporte.
-          </p>
+        <div className="min-h-[60vh] grid place-items-center p-6">
+          <div className="w-full max-w-2xl rounded-xl border bg-white p-6 shadow">
+            <div className="flex items-start gap-4">
+              <div className="text-4xl">💥</div>
+              <div className="flex-1">
+                <h1 className="text-xl font-semibold text-slate-900">
+                  Ops, algo deu errado.
+                </h1>
+                <p className="mt-1 text-sm text-slate-600">
+                  Isso não era para acontecer. Você pode recarregar a página ou
+                  voltar para continuar trabalhando.
+                </p>
 
-          <button
-            onClick={this.handleReset}
-            className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-md"
-          >
-            Tentar novamente
-          </button>
+                <div className="mt-4 flex flex-wrap gap-2">
+                  <button
+                    onClick={this.handleBack}
+                    className="px-3 py-2 rounded-md border bg-white hover:bg-slate-50"
+                  >
+                    Voltar
+                  </button>
+                  <button
+                    onClick={this.handleReload}
+                    className="px-3 py-2 rounded-md bg-blue-600 text-white hover:bg-blue-700"
+                  >
+                    Recarregar
+                  </button>
+                  <Link
+                    to="/"
+                    className="px-3 py-2 rounded-md bg-emerald-600 text-white hover:bg-emerald-700"
+                  >
+                    Ir para Início
+                  </Link>
+                  <button
+                    onClick={this.toggleDetails}
+                    className="px-3 py-2 rounded-md border bg-white hover:bg-slate-50"
+                  >
+                    {this.state.showDetails ? "Ocultar detalhes" : "Mostrar detalhes"}
+                  </button>
+                  {this.state.showDetails && (
+                    <button
+                      onClick={this.copyDetails}
+                      className="px-3 py-2 rounded-md border bg-white hover:bg-slate-50"
+                    >
+                      {this.state.copied ? "Copiado ✓" : "Copiar detalhes"}
+                    </button>
+                  )}
+                </div>
 
-          <details className="mt-6 max-w-2xl text-left w-full bg-gray-50 border rounded p-4">
-            <summary className="cursor-pointer font-medium">
-              Detalhes técnicos
-            </summary>
-            <pre className="mt-2 whitespace-pre-wrap text-sm text-gray-800">
-              {this.state.error?.toString()}
-              {"\n"}
-              {this.state.errorInfo?.componentStack}
-            </pre>
-          </details>
+                {this.state.showDetails && (
+                  <div className="mt-4">
+                    <h2 className="text-sm font-medium text-slate-700">Detalhes técnicos</h2>
+                    <pre className="mt-2 max-h-64 overflow-auto rounded-md bg-slate-50 p-3 text-xs text-slate-800">
+{String(this.state.error)}
+{this.state.error?.stack ? `\n\n${this.state.error.stack}` : ""}
+{this.state.errorInfo?.componentStack
+  ? `\n\nReact stack:\n${this.state.errorInfo.componentStack}`
+  : ""}
+                    </pre>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
         </div>
       );
     }
-
     return this.props.children;
   }
 }
-
-export default ErrorBoundary;

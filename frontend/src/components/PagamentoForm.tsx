@@ -1,164 +1,250 @@
-import React, { useState } from 'react';
-import axios from 'axios';
+// src/components/PagamentoForm.tsx
+import { useEffect, useMemo, useRef, useState } from "react";
+import api from "../services/api";
 
-const PagamentoForm: React.FC = () => {
-  const [clienteId, setClienteId] = useState('');
-  const [dataLancamento, setDataLancamento] = useState('');
-  const [dataVencimento, setDataVencimento] = useState('');
-  const [valor, setValor] = useState('');
-  const [formaPagamento, setFormaPagamento] = useState('');
-  const [observacoes, setObservacoes] = useState('');
+type Cliente = { id: number; nome_fantasia: string };
+type Forma = { id: number; descricao: string; ativo: boolean };
+
+export default function PagamentoForm() {
+  // ====== estado principal ======
+  const [clienteInput, setClienteInput] = useState("");
+  const [clienteId, setClienteId] = useState<number | "">("");
+  const [valor, setValor] = useState<string>(""); // usa string para não quebrar digitação
+  const [forma, setForma] = useState<string>("PIX");
+  const [obs, setObs] = useState("");
+  const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    try {
-      const token = localStorage.getItem('token');
-      await axios.post('http://localhost:3333/pagamentos', {
-        cliente_id: parseInt(clienteId),
-        data_lancamento: dataLancamento,
-        data_vencimento: dataVencimento,
-        valor: parseFloat(valor),
-        forma_pagamento: formaPagamento,
-        observacoes: observacoes,
-      }, {
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
-      });
-      alert('Pagamento cadastrado com sucesso!');
-      setClienteId('');
-      setDataLancamento('');
-      setDataVencimento('');
-      setValor('');
-      setFormaPagamento('');
-      setObservacoes('');
-      setError(null);
-    } catch (err: any) {
-      if (axios.isAxiosError(err) && err.response) {
-        setError(err.response.data.message || 'Erro ao cadastrar pagamento');
-      } else {
-        setError('Ocorreu um erro. Tente novamente.');
-      }
-      console.error('Erro no cadastro de pagamento:', err);
+  // ====== auto-complete de cliente ======
+  const [cliOpen, setCliOpen] = useState(false);
+  const [cliOpts, setCliOpts] = useState<Cliente[]>([]);
+  const cliBoxRef = useRef<HTMLDivElement>(null);
+  const debouncedSearch = useDebounce(clienteInput, 250);
+
+  useEffect(() => {
+    const onClickOutside = (e: MouseEvent) => {
+      if (!cliBoxRef.current?.contains(e.target as Node)) setCliOpen(false);
+    };
+    document.addEventListener("mousedown", onClickOutside);
+    return () => document.removeEventListener("mousedown", onClickOutside);
+  }, []);
+
+  useEffect(() => {
+    if (debouncedSearch.trim().length < 2 || clienteId !== "") {
+      setCliOpts([]);
+      return;
     }
-  };
+    let cancel = false;
+    (async () => {
+      try {
+        const { data } = await api.get("/clientes", { params: { search: debouncedSearch } });
+        if (cancel) return;
+        const list: Cliente[] = (data?.data ?? data ?? []).slice(0, 10);
+        setCliOpts(list);
+        setCliOpen(list.length > 0);
+      } catch {
+        // silencioso
+      }
+    })();
+    return () => {
+      cancel = true;
+    };
+  }, [debouncedSearch, clienteId]);
+
+  function selectCliente(c: Cliente) {
+    setClienteInput(c.nome_fantasia);
+    setClienteId(c.id);
+    setCliOpen(false);
+  }
+  function clearCliente() {
+    setClienteInput("");
+    setClienteId("");
+    setCliOpts([]);
+    setCliOpen(false);
+  }
+
+  // ====== formas de pagamento (carrega do backend se existir) ======
+  const [formas, setFormas] = useState<string[]>(["PIX", "BOLETO", "DINHEIRO"]);
+  useEffect(() => {
+    (async () => {
+      try {
+        const { data } = await api.get("/pagamentos/formas");
+        // aceita tanto [{descricao}] quanto array simples
+        const list = (data?.data ?? data ?? []) as any[];
+        const valores = list.map((f: any) => (typeof f === "string" ? f : f.descricao)).filter(Boolean);
+        if (valores.length) {
+          setFormas(valores);
+          if (!valores.includes(forma)) setForma(valores[0]);
+        }
+      } catch {
+        // segue com defaults
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // ====== submit ======
+  const valorNumber = useMemo(() => {
+    const normalized = valor.replace(",", ".").trim();
+    const n = Number(normalized);
+    return Number.isFinite(n) ? n : NaN;
+  }, [valor]);
+
+  async function save(e: React.FormEvent) {
+    e.preventDefault();
+    setError(null);
+
+    if (clienteId === "") {
+      setError("Selecione um cliente.");
+      return;
+    }
+    if (!valor || Number.isNaN(valorNumber) || valorNumber <= 0) {
+      setError("Informe um valor válido.");
+      return;
+    }
+
+    setSaving(true);
+    try {
+      await api.post("/pagamentos", {
+        cliente_id: Number(clienteId),
+        valor: valorNumber,
+        forma_pagamento: forma,
+        observacao: obs || null,
+      });
+      // reset
+      clearCliente();
+      setValor("");
+      setObs("");
+      alert("Pagamento lançado!");
+    } catch (e: any) {
+      setError(e?.response?.data?.message || "Falha ao lançar pagamento.");
+    } finally {
+      setSaving(false);
+    }
+  }
 
   return (
-    <div className="bg-white shadow rounded-lg p-4">
-      <h2 className="text-xl font-semibold mb-4">Novo Pagamento</h2>
-      {error && <p className="text-red-500">{error}</p>}
-      <form onSubmit={handleSubmit} className="space-y-4">
-        <div>
-          <label htmlFor="clienteId" className="block text-gray-700 text-sm font-bold mb-2">
-            ID do Cliente
-          </label>
-          <input
-            type="number"
-            id="clienteId"
-            name="clienteId"
-            className="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline"
-            value={clienteId}
-            onChange={(e) => setClienteId(e.target.value)}
-          />
+    <form onSubmit={save} className="space-y-4 max-w-2xl">
+      <h1 className="text-xl font-semibold">Lançar pagamento</h1>
+
+      {error && (
+        <div className="rounded border border-red-200 bg-red-50 p-2 text-sm text-red-700">
+          {error}
         </div>
-        <div>
-          <label htmlFor="dataLancamento" className="block text-gray-700 text-sm font-bold mb-2">
-            Data de Lançamento
-          </label>
-          <input
-            type="date"
-            id="dataLancamento"
-            name="dataLancamento"
-            className="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline"
-            value={dataLancamento}
-            onChange={(e) => setDataLancamento(e.target.value)}
-          />
+      )}
+
+      <div className="grid md:grid-cols-2 gap-4">
+        {/* Cliente (auto-complete) */}
+        <div className="md:col-span-2" ref={cliBoxRef}>
+          <label className="text-sm block mb-1">Cliente</label>
+          <div className="relative">
+            <input
+              className="border rounded px-3 py-2 w-full pr-20"
+              placeholder="Digite para buscar pelo nome…"
+              value={clienteInput}
+              onChange={(e) => {
+                setClienteInput(e.target.value);
+                if (clienteId !== "") setClienteId("");
+              }}
+              onFocus={() => {
+                if (cliOpts.length > 0) setCliOpen(true);
+              }}
+              required
+            />
+            {(clienteId !== "" || clienteInput) && (
+              <button
+                type="button"
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-xs px-2 py-1 rounded bg-slate-100 hover:bg-slate-200"
+                onClick={clearCliente}
+                title="Limpar"
+              >
+                Limpar
+              </button>
+            )}
+            {cliOpen && cliOpts.length > 0 && (
+              <div className="absolute z-10 mt-1 w-full rounded border bg-white shadow">
+                {cliOpts.map((c) => (
+                  <button
+                    key={c.id}
+                    type="button"
+                    className="block w-full text-left px-3 py-2 hover:bg-slate-50"
+                    onClick={() => selectCliente(c)}
+                  >
+                    <div className="font-medium">{c.nome_fantasia}</div>
+                    <div className="text-xs text-slate-500">#{c.id}</div>
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+          {clienteId !== "" && (
+            <div className="mt-1 text-xs text-slate-600">
+              Selecionado: <b>#{clienteId}</b>
+            </div>
+          )}
         </div>
+
+        {/* Valor */}
         <div>
-          <label htmlFor="dataVencimento" className="block text-gray-700 text-sm font-bold mb-2">
-            Data de Vencimento
-          </label>
+          <label className="text-sm block mb-1">Valor</label>
           <input
-            type="date"
-            id="dataVencimento"
-            name="dataVencimento"
-            className="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline"
-            value={dataVencimento}
-            onChange={(e) => setDataVencimento(e.target.value)}
-          />
-        </div>
-        <div>
-          <label htmlFor="valor" className="block text-gray-700 text-sm font-bold mb-2">
-            Valor
-          </label>
-          <input
-            type="number"
-            id="valor"
-            name="valor"
-            className="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline"
+            className="border rounded px-3 py-2 w-full"
+            inputMode="decimal"
+            placeholder="0,00"
             value={valor}
             onChange={(e) => setValor(e.target.value)}
+            required
           />
+          <div className="text-xs text-slate-500 mt-1">
+            Use vírgula ou ponto para decimais.
+          </div>
         </div>
+
+        {/* Forma */}
         <div>
-          <label htmlFor="formaPagamento" className="block text-gray-700 text-sm font-bold mb-2">
-            Forma de Pagamento
-          </label>
+          <label className="text-sm block mb-1">Forma</label>
           <select
-            id="formaPagamento"
-            className="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline"
-            value={formaPagamento}
-            onChange={(e) => setFormaPagamento(e.target.value)}
+            className="border rounded px-3 py-2 w-full"
+            value={forma}
+            onChange={(e) => setForma(e.target.value)}
           >
-            <option value="">Selecione a Forma de Pagamento</option>
-            <option value="BOLETO A VISTA - 01 DIAS">BOLETO A VISTA - 01 DIAS</option>
-            <option value="BOLETO A VISTA - 07 DIAS">BOLETO A VISTA - 07 DIAS</option>
-            <option value="BOLETO A VISTA - 15 DIAS">BOLETO A VISTA - 15 DIAS</option>
-            <option value="BOLETO PRAZO - 05/10/15/20 DIAS">BOLETO PRAZO - 05/10/15/20 DIAS</option>
-            <option value="BOLETO - 05/10/15/20 DIAS">BOLETO - 05/10/15/20 DIAS</option>
-            <option value="BOLETO 15 DIAS">BOLETO 15 DIAS</option>
-            <option value="BOLETO 30 DIAS">BOLETO 30 DIAS</option>
-            <option value="BOLETO 30/60">BOLETO 30/60</option>
-            <option value="BOLETO 30/45/60">BOLETO 30/45/60</option>
-            <option value="BOLETO 30/45/60/75">BOLETO 30/45/60/75</option>
-            <option value="BOLETO 30/45/60/75/90">BOLETO 30/45/60/75/90</option>
-            <option value="BOLETO 30/60/90">BOLETO 30/60/90</option>
-            <option value="BOLETO 30/60/90/120">BOLETO 30/60/90/120</option>
-            <option value="CHEQUE A VISTA">CHEQUE A VISTA</option>
-            <option value="CHEQUE NA ENTREGA - ATÉ 15 DIAS">CHEQUE NA ENTREGA - ATÉ 15 DIAS</option>
-            <option value="CHEQUE NA ENTREGA - ATÉ 30 DIAS">CHEQUE NA ENTREGA - ATÉ 30 DIAS</option>
-            <option value="CHEQUE NA ENTREGA - ATÉ 60 DIAS">CHEQUE NA ENTREGA - ATÉ 60 DIAS</option>
-            <option value="CHEQUE NA ENTREGA - ATÉ 90 DIAS">CHEQUE NA ENTREGA - ATÉ 90 DIAS</option>
-            <option value="CHEQUE NA ENTREGA - ATÉ 120 DIAS">CHEQUE NA ENTREGA - ATÉ 120 DIAS</option>
-            <option value="CHEQUE NA ENTREGA ( 30/60/90 DIAS )">CHEQUE NA ENTREGA ( 30/60/90 DIAS )</option>
-            <option value="CHEQUE NA ENTREGA ( DIAS IRREGULARES )">CHEQUE NA ENTREGA ( DIAS IRREGULARES )</option>
-            <option value="DEPOSITA DEPOIS QUE RECEBE A MERCADORIA">DEPOSITA DEPOIS QUE RECEBE A MERCADORIA</option>
-            <option value="DINHEIRO OU DEPÓSITO">DINHEIRO OU DEPÓSITO</option>
-            <option value="ENTREGA MERCADORIA E RECEBE CHEQUE TERCEIRO DEPOIS">ENTREGA MERCADORIA E RECEBE CHEQUE TERCEIRO DEPOIS</option>
+            {formas.map((f) => (
+              <option key={f} value={f}>
+                {f}
+              </option>
+            ))}
           </select>
         </div>
-        <div>
-          <label htmlFor="observacoes" className="block text-gray-700 text-sm font-bold mb-2">
-            Observações
-          </label>
-          <textarea
-            id="observacoes"
-            name="observacoes"
-            className="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700 leading-tight focus:outline-none focus:shadow-outline"
-            value={observacoes}
-            onChange={(e) => setObservacoes(e.target.value)}
+
+        {/* Observação */}
+        <div className="md:col-span-2">
+          <label className="text-sm block mb-1">Observação</label>
+          <input
+            className="border rounded px-3 py-2 w-full"
+            value={obs}
+            onChange={(e) => setObs(e.target.value)}
+            placeholder="opcional"
           />
         </div>
-        <button
-          type="submit"
-          className="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded focus:outline-none focus:shadow-outline"
-        >
-          Salvar
-        </button>
-      </form>
-    </div>
-  );
-};
+      </div>
 
-export default PagamentoForm;
+      <button
+        type="submit"
+        disabled={saving}
+        className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
+      >
+        {saving ? "Salvando…" : "Salvar"}
+      </button>
+    </form>
+  );
+}
+
+/** Debounce simples para texto */
+function useDebounce<T>(value: T, ms = 300) {
+  const [v, setV] = useState(value);
+  useEffect(() => {
+    const t = setTimeout(() => setV(value), ms);
+    return () => clearTimeout(t);
+  }, [value, ms]);
+  return v;
+}

@@ -1,197 +1,144 @@
 // src/components/Dominios.tsx
-import React, { useEffect, useState, useCallback } from "react";
-import axios from "axios";
-import { Link, useNavigate } from "react-router-dom";
+import { useEffect, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
+import api from "../services/api";
 
-interface Dominio {
+type Dominio = {
   id: number;
   chave: string;
   nome: string;
   ativo: boolean;
-}
+};
 
-const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:3333";
+export default function Dominios() {
+  const [rows, setRows] = useState<Dominio[]>([]);
+  const [loading, setLoading] = useState(false);
+  const [query, setQuery] = useState("");
+  const [onlyStatus, setOnlyStatus] = useState<"" | "ATIVOS" | "INATIVOS">("");
 
-const Dominios: React.FC = () => {
-  const navigate = useNavigate();
-  const [dominios, setDominios] = useState<Dominio[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [reloading, setReloading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  const fetchDominios = useCallback(async () => {
-    setError(null);
+  async function load() {
+    setLoading(true);
     try {
-      const token = localStorage.getItem("token");
-      if (!token) {
-        navigate("/login");
-        return;
-      }
-
-      const response = await axios.get(`${API_URL}/dominios`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      setDominios(response.data as Dominio[]);
-    } catch (err: any) {
-      if (axios.isAxiosError(err)) {
-        if (err.response?.status === 401) {
-          navigate("/login");
-          return;
-        }
-        setError(err.response?.data?.message || "Erro ao buscar domínios");
-      } else {
-        setError("Ocorreu um erro. Tente novamente.");
-      }
-      console.error("Erro ao buscar domínios:", err);
+      const { data } = await api.get("/dominios");
+      setRows(data?.data ?? data ?? []);
     } finally {
       setLoading(false);
-      setReloading(false);
     }
-  }, [navigate]);
+  }
 
   useEffect(() => {
-    fetchDominios();
-  }, [fetchDominios]);
+    load();
+  }, []);
 
-  const handleToggleAtivo = async (dominio: Dominio) => {
-    try {
-      setReloading(true);
-      const token = localStorage.getItem("token");
-      if (!token) {
-        navigate("/login");
-        return;
-      }
-      await axios.put(
-        `${API_URL}/dominios/${dominio.id}`,
-        { ativo: !dominio.ativo },
-        { headers: { Authorization: `Bearer ${token}` } }
-      );
-      fetchDominios();
-    } catch (err: any) {
-      setReloading(false);
-      if (axios.isAxiosError(err) && err.response?.status === 401) {
-        navigate("/login");
-        return;
-      }
-      alert("Não foi possível atualizar o domínio.");
-      console.error(err);
-    }
-  };
-
-  const handleDelete = async (dominio: Dominio) => {
-    if (!confirm(`Excluir o domínio "${dominio.nome}"?`)) return;
-    try {
-      setReloading(true);
-      const token = localStorage.getItem("token");
-      if (!token) {
-        navigate("/login");
-        return;
-      }
-      await axios.delete(`${API_URL}/dominios/${dominio.id}`, {
-        headers: { Authorization: `Bearer ${token}` },
-      });
-      fetchDominios();
-    } catch (err: any) {
-      setReloading(false);
-      if (axios.isAxiosError(err) && err.response?.status === 401) {
-        navigate("/login");
-        return;
-      }
-      alert(
-        err.response?.data?.message ||
-          "Não foi possível excluir o domínio (há itens vinculados?)."
-      );
-      console.error(err);
-    }
-  };
-
-  if (loading) return <div className="p-4">Carregando...</div>;
-  if (error) return <div className="p-4 text-red-600">{error}</div>;
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    let list = rows;
+    if (onlyStatus === "ATIVOS") list = list.filter((d) => d.ativo);
+    if (onlyStatus === "INATIVOS") list = list.filter((d) => !d.ativo);
+    if (!q) return list;
+    return list.filter(
+      (d) =>
+        d.nome.toLowerCase().includes(q) ||
+        d.chave.toLowerCase().includes(q) ||
+        String(d.id).includes(q)
+    );
+  }, [rows, query, onlyStatus]);
 
   return (
-    <div className="bg-white shadow rounded-lg p-4">
-      <div className="flex items-center justify-between mb-4">
-        <h2 className="text-xl font-semibold">Domínios</h2>
-        <div className="flex gap-2">
-          {/* Se você tiver uma rota/página com formulário, pode trocar por <Link to="/dominios/novo">Novo</Link> */}
+    <div className="space-y-4">
+      <div className="flex flex-wrap gap-2 justify-between">
+        <h1 className="text-xl font-semibold">Domínios</h1>
+        <div className="flex items-end gap-2">
+          <div>
+            <label className="text-sm">Buscar</label>
+            <input
+              className="border rounded px-3 py-2"
+              placeholder="nome, chave ou #id…"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+            />
+          </div>
+          <div>
+            <label className="text-sm">Status</label>
+            <select
+              className="border rounded px-3 py-2"
+              value={onlyStatus}
+              onChange={(e) =>
+                setOnlyStatus(e.target.value as "" | "ATIVOS" | "INATIVOS")
+              }
+            >
+              <option value="">(todos)</option>
+              <option value="ATIVOS">Ativos</option>
+              <option value="INATIVOS">Inativos</option>
+            </select>
+          </div>
           <Link
-            to="/dominios" // ajuste se tiver tela específica de criação
-            onClick={(e) => {
-              e.preventDefault();
-              alert(
-                "Use o formulário de Domínio (DominioForm) para cadastrar. Após salvar, clique em Atualizar."
-              );
-            }}
-            className="bg-green-600 hover:bg-green-700 text-white font-semibold px-4 py-2 rounded"
+            to="/dominios/novo"
+            className="px-3 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
           >
-            Novo Domínio
+            Novo
           </Link>
-          <button
-            onClick={() => {
-              setReloading(true);
-              fetchDominios();
-            }}
-            className="bg-blue-600 hover:bg-blue-700 text-white font-semibold px-4 py-2 rounded"
-          >
-            {reloading ? "Atualizando..." : "Atualizar"}
-          </button>
         </div>
       </div>
 
-      <div className="overflow-x-auto">
-        <table className="min-w-full table-auto border border-gray-200">
+      <div className="rounded border bg-white overflow-hidden">
+        <table className="w-full text-sm">
           <thead className="bg-gray-50">
             <tr>
-              <th className="px-4 py-2 text-left">ID</th>
-              <th className="px-4 py-2 text-left">Chave</th>
-              <th className="px-4 py-2 text-left">Nome</th>
-              <th className="px-4 py-2 text-left">Ativo</th>
-              <th className="px-4 py-2 text-left">Ações</th>
+              <th className="p-2 border text-left">#</th>
+              <th className="p-2 border text-left">Chave</th>
+              <th className="p-2 border text-left">Nome</th>
+              <th className="p-2 border text-left">Status</th>
+              <th className="p-2 border text-left">Ações</th>
             </tr>
           </thead>
           <tbody>
-            {dominios.map((dominio) => (
-              <tr key={dominio.id} className="border-t">
-                <td className="px-4 py-2">{dominio.id}</td>
-                <td className="px-4 py-2">{dominio.chave}</td>
-                <td className="px-4 py-2">{dominio.nome}</td>
-                <td className="px-4 py-2">
+            {filtered.map((d) => (
+              <tr key={d.id} className="hover:bg-gray-50">
+                <td className="p-2 border">{d.id}</td>
+                <td className="p-2 border font-mono">{d.chave}</td>
+                <td className="p-2 border">{d.nome}</td>
+                <td className="p-2 border">
                   <span
                     className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${
-                      dominio.ativo
-                        ? "bg-green-100 text-green-800"
-                        : "bg-gray-200 text-gray-700"
+                      d.ativo
+                        ? "bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200"
+                        : "bg-rose-50 text-rose-700 ring-1 ring-rose-200"
                     }`}
                   >
-                    {dominio.ativo ? "Sim" : "Não"}
+                    {d.ativo ? "Ativo" : "Inativo"}
                   </span>
                 </td>
-                <td className="px-4 py-2 flex flex-wrap gap-2">
-                  <Link
-                    to={`/dominios/${dominio.id}/itens`}
-                    className="px-3 py-1 rounded bg-indigo-600 hover:bg-indigo-700 text-white text-sm"
-                  >
-                    Ver Itens
-                  </Link>
-                  <button
-                    onClick={() => handleToggleAtivo(dominio)}
-                    className="px-3 py-1 rounded bg-amber-500 hover:bg-amber-600 text-white text-sm"
-                  >
-                    {dominio.ativo ? "Desativar" : "Ativar"}
-                  </button>
-                  <button
-                    onClick={() => handleDelete(dominio)}
-                    className="px-3 py-1 rounded bg-red-600 hover:bg-red-700 text-white text-sm"
-                  >
-                    Excluir
-                  </button>
+                <td className="p-2 border">
+                  <div className="flex gap-3">
+                    <Link
+                      to={`/dominios/${d.id}/itens`}
+                      className="text-blue-600 underline"
+                    >
+                      Itens
+                    </Link>
+                    <Link
+                      to={`/dominios/${d.id}/editar`}
+                      className="text-emerald-700 underline"
+                    >
+                      Editar
+                    </Link>
+                  </div>
                 </td>
               </tr>
             ))}
-            {dominios.length === 0 && (
+
+            {!loading && filtered.length === 0 && (
               <tr>
-                <td className="px-4 py-6 text-center text-gray-600" colSpan={5}>
-                  Nenhum domínio cadastrado.
+                <td colSpan={5} className="p-4 text-center text-gray-500">
+                  Nenhum domínio
+                </td>
+              </tr>
+            )}
+            {loading && (
+              <tr>
+                <td colSpan={5} className="p-4 text-center">
+                  Carregando…
                 </td>
               </tr>
             )}
@@ -200,6 +147,4 @@ const Dominios: React.FC = () => {
       </div>
     </div>
   );
-};
-
-export default Dominios;
+}

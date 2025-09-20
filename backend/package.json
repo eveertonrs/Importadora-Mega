@@ -4,12 +4,16 @@
   "description": "API MEGA",
   "main": "dist/app.js",
   "type": "commonjs",
+  "engines": {
+    "node": ">=18.0.0"
+  },
   "scripts": {
     "dev": "ts-node-dev --respawn --transpile-only src/app.ts",
     "build": "tsc",
     "start": "node dist/app.js",
-    "seed": "ts-node-dev src/seed.ts",
-    "migrate": "ts-node-dev src/migrate.ts"
+    "migrate": "ts-node-dev --respawn --transpile-only src/migrate.ts",
+    "seed": "ts-node-dev --respawn --transpile-only src/seed.ts",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "bcryptjs": "^2.4.3",
@@ -18,7 +22,6 @@
     "express": "^5.1.0",
     "jsonwebtoken": "^9.0.2",
     "morgan": "^1.10.1",
-    "msnodesqlv8": "^5.1.1",
     "mssql": "^11.0.1",
     "zod": "^3.23.8"
   },

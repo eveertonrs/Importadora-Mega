@@ -4,7 +4,7 @@ import axios from "axios";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "../contexts/AuthContext";
 
-const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:3333";
+const API_URL = import.meta.env.VITE_API_URL ?? "https://x3nbflkg-3333.brs.devtunnels.ms";
 
 const Login: React.FC = () => {
   const [email, setEmail] = useState("");

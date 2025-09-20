@@ -1,23 +1,27 @@
-// src/controllers/pagamentos.controller.ts
 import { Request, Response } from "express";
 import { z } from "zod";
 import { pool } from "../db";
 import sql from "mssql";
 
-// schema para criação/atualização de “pagamento” (lançamento)
-const pagamentoSchema = z.object({
+/** mapeia sentido pelo tipo (mantém similar aos blocos) */
+const entradas = new Set(["CHEQUE", "DINHEIRO", "BOLETO", "DEPOSITO", "PIX"]);
+const mapRecebimentoToSentido = (t: string) => (entradas.has(t.toUpperCase()) ? "ENTRADA" : "SAIDA");
+
+/** payload que o front envia ao criar */
+const createSchema = z.object({
   cliente_id: z.number().int(),
-  // no seu código você usa .datetime() em outros pontos; manterei por consistência
-  data_lancamento: z.string().datetime(),
-  data_vencimento: z.string().datetime().optional(), // mapeia para bom_para
   valor: z.number().positive(),
-  forma_pagamento: z.string(), // mapeia para tipo_recebimento
-  observacoes: z.string().optional(),
+  forma_pagamento: z.string().min(1),
+  observacao: z.string().optional().nullable(),
+  /** opcionais “escondidos” (não usados no seu front, mas ok manter) */
+  bloco_id: z.number().int().optional(),
+  data_lancamento: z.string().datetime().optional(),
+  data_vencimento: z.string().datetime().optional(),
   tipo_cheque: z.enum(["PROPRIO", "TERCEIRO"]).optional(),
   numero_referencia: z.string().optional(),
-  bloco_id: z.number().int().optional(),
 });
 
+/** lista genérica (não usada no seu front, mas mantida) */
 export const getPagamentos = async (req: Request, res: Response) => {
   try {
     const { cliente_id, status, tipo_recebimento } = req.query as {
@@ -27,218 +31,172 @@ export const getPagamentos = async (req: Request, res: Response) => {
     };
 
     let query = `
-      SELECT bl.*,
-             b.cliente_id,
-             c.nome_fantasia,
-             b.status AS status_bloco
+      SELECT bl.*, b.cliente_id, c.nome_fantasia, b.status AS status_bloco
       FROM bloco_lancamentos bl
       JOIN blocos b ON bl.bloco_id = b.id
       JOIN clientes c ON b.cliente_id = c.id
-      WHERE 1 = 1
+      WHERE 1=1
     `;
+    const reqDb = pool.request();
 
-    const request = pool.request();
-
-    if (cliente_id) {
-      query += " AND b.cliente_id = @cliente_id";
-      request.input("cliente_id", Number(cliente_id));
-    }
-
-    if (status) {
-      query += " AND bl.status = @status";
-      request.input("status", status);
-    }
-
-    if (tipo_recebimento) {
-      query += " AND bl.tipo_recebimento = @tipo_recebimento";
-      request.input("tipo_recebimento", tipo_recebimento);
-    }
+    if (cliente_id) { query += " AND b.cliente_id = @cliente_id"; reqDb.input("cliente_id", Number(cliente_id)); }
+    if (status)      { query += " AND bl.status = @status";        reqDb.input("status", status); }
+    if (tipo_recebimento) { query += " AND bl.tipo_recebimento = @tipo"; reqDb.input("tipo", tipo_recebimento); }
 
     query += " ORDER BY bl.data_lancamento DESC, bl.id DESC";
-
-    const result = await request.query(query);
-    res.json(result.recordset);
-  } catch (error) {
-    console.error("Erro ao buscar pagamentos (lançamentos):", error);
+    const rs = await reqDb.query(query);
+    res.json(rs.recordset);
+  } catch (e) {
+    console.error("Erro ao buscar pagamentos:", e);
     res.status(500).json({ message: "Erro interno no servidor" });
   }
 };
 
+/** obter 1 lançamento */
 export const getPagamentoById = async (req: Request, res: Response) => {
   const { id } = req.params;
-
   try {
-    const result = await pool
-      .request()
-      .input("id", id)
+    const rs = await pool.request()
+      .input("id", Number(id))
       .query(`
-        SELECT bl.*,
-               b.cliente_id,
-               c.nome_fantasia
-        FROM bloco_lancamentos bl
-        JOIN blocos b ON bl.bloco_id = b.id
-        JOIN clientes c ON b.cliente_id = c.id
-        WHERE bl.id = @id
+        SELECT bl.*, b.cliente_id, c.nome_fantasia
+          FROM bloco_lancamentos bl
+          JOIN blocos b ON bl.bloco_id = b.id
+          JOIN clientes c ON b.cliente_id = c.id
+         WHERE bl.id = @id
       `);
-
-    if (result.recordset.length === 0) {
-      return res.status(404).json({ message: "Lançamento não encontrado" });
-    }
-
-    res.json(result.recordset[0]);
-  } catch (error) {
-    console.error("Erro ao buscar lançamento:", error);
+    if (!rs.recordset.length) return res.status(404).json({ message: "Lançamento não encontrado" });
+    res.json(rs.recordset[0]);
+  } catch (e) {
+    console.error("Erro ao buscar lançamento:", e);
     res.status(500).json({ message: "Erro interno no servidor" });
   }
 };
 
+/** criar lançamento – compatível com PagamentoForm do front */
 export const createPagamento = async (req: Request, res: Response) => {
   try {
-    const data = pagamentoSchema.parse(req.body);
+    const data = createSchema.parse(req.body);
 
-    // Inicia transação (precisamos possivelmente criar o bloco)
-    const transaction = new sql.Transaction(pool);
-    await transaction.begin();
+    const tx = new sql.Transaction(pool);
+    await tx.begin();
 
     try {
       let blocoId = data.bloco_id;
 
-      // Se não informaram bloco, localiza um bloco ABERTO do cliente ou cria
+      // encontra (ou cria) bloco ABERTO do cliente
       if (!blocoId) {
-        const findReq = new sql.Request(transaction);
-        const openBloco = await findReq
-          .input("cliente_id", data.cliente_id)
+        const q = await new sql.Request(tx)
+          .input("cliente_id", sql.Int, data.cliente_id)
           .query(`
-            SELECT TOP 1 id
-            FROM blocos
-            WHERE cliente_id = @cliente_id AND status = 'ABERTO'
+            SELECT TOP 1 id FROM blocos
+            WHERE cliente_id=@cliente_id AND status='ABERTO'
             ORDER BY aberto_em DESC
           `);
-
-        if (openBloco.recordset.length > 0) {
-          blocoId = openBloco.recordset[0].id;
+        if (q.recordset.length) {
+          blocoId = q.recordset[0].id;
         } else {
-          const codigoAuto = `AUTO-${new Date()
-            .toISOString()
-            .replace(/[-:T.Z]/g, "")
-            .slice(0, 12)}`; // AUTO-YYYYMMDDHHMM
-
-          const createBlocoReq = new sql.Request(transaction);
-          const novoBloco = await createBlocoReq
-            .input("cliente_id", data.cliente_id)
-            .input("codigo", codigoAuto)
-            .input("observacao", "Criado automaticamente ao inserir lançamento")
+          const codigo = `AUTO-${new Date().toISOString().replace(/[-:T.Z]/g, "").slice(0,12)}`;
+          const novo = await new sql.Request(tx)
+            .input("cliente_id", sql.Int, data.cliente_id)
+            .input("codigo", sql.VarChar(50), codigo)
+            .input("obs", sql.VarChar(sql.MAX), "Criado automaticamente ao inserir lançamento")
             .query(`
               INSERT INTO blocos (cliente_id, codigo, status, aberto_em, observacao)
               OUTPUT INSERTED.id
-              VALUES (@cliente_id, @codigo, 'ABERTO', SYSDATETIME(), @observacao)
+              VALUES (@cliente_id, @codigo, 'ABERTO', SYSUTCDATETIME(), @obs)
             `);
-
-          blocoId = novoBloco.recordset[0].id;
+          blocoId = novo.recordset[0].id;
         }
       } else {
-        // Validar se o bloco existe, está ABERTO e pertence ao cliente informado
-        const validateReq = new sql.Request(transaction);
-        const bloco = await validateReq
-          .input("bloco_id", blocoId)
-          .input("cliente_id", data.cliente_id)
+        // valida bloco informado
+        const ok = await new sql.Request(tx)
+          .input("bloco_id", sql.Int, blocoId)
+          .input("cliente_id", sql.Int, data.cliente_id)
           .query(`
-            SELECT id FROM blocos
-            WHERE id = @bloco_id AND cliente_id = @cliente_id AND status = 'ABERTO'
+            SELECT 1 FROM blocos
+            WHERE id=@bloco_id AND cliente_id=@cliente_id AND status='ABERTO'
           `);
-
-        if (bloco.recordset.length === 0) {
-          await transaction.rollback();
-          return res
-            .status(400)
-            .json({ message: "Bloco inválido: inexistente, fechado ou não pertence ao cliente." });
+        if (!ok.recordset.length) {
+          await tx.rollback();
+          return res.status(400).json({ message: "Bloco inválido (inexistente/fechado ou de outro cliente)." });
         }
       }
 
-      // Inserir lançamento
-      const insertReq = new sql.Request(transaction);
-      const inserted = await insertReq
-        .input("bloco_id", blocoId)
-        .input("tipo_recebimento", data.forma_pagamento) // mapeamento
-        .input("valor", data.valor)
-        .input("data_lancamento", data.data_lancamento)
-        .input("bom_para", data.data_vencimento ?? null)
-        .input("tipo_cheque", data.tipo_cheque ?? null)
-        .input("numero_referencia", data.numero_referencia ?? null)
-        .input("status", "PENDENTE")
-        .input("observacao", data.observacoes ?? null)
+      const tipo = data.forma_pagamento.toUpperCase();
+      const sentido = mapRecebimentoToSentido(tipo);
+
+      const inserted = await new sql.Request(tx)
+        .input("bloco_id", sql.Int, blocoId)
+        .input("tipo_recebimento", sql.VarChar(30), tipo)
+        .input("valor", sql.Decimal(18,2), data.valor)
+        .input("data_lancamento", sql.DateTime2, data.data_lancamento ?? new Date().toISOString())
+        .input("bom_para", sql.DateTime2, data.data_vencimento ?? null)
+        .input("tipo_cheque", sql.VarChar(15), data.tipo_cheque ?? null)
+        .input("numero_referencia", sql.VarChar(100), data.numero_referencia ?? null)
+        .input("status", sql.VarChar(15), "PENDENTE")
+        .input("observacao", sql.VarChar(sql.MAX), data.observacao ?? null)
+        .input("sentido", sql.VarChar(10), sentido)
         .query(`
           INSERT INTO bloco_lancamentos
-            (bloco_id, tipo_recebimento, valor, data_lancamento, bom_para, tipo_cheque, numero_referencia, status, observacao)
+            (bloco_id, tipo_recebimento, sentido, valor, data_lancamento, bom_para, tipo_cheque,
+             numero_referencia, status, observacao, criado_em)
           OUTPUT INSERTED.*
           VALUES
-            (@bloco_id, @tipo_recebimento, @valor, @data_lancamento, @bom_para, @tipo_cheque, @numero_referencia, @status, @observacao)
+            (@bloco_id, @tipo_recebimento, @sentido, @valor, @data_lancamento, @bom_para,
+             @tipo_cheque, @numero_referencia, @status, @observacao, SYSUTCDATETIME())
         `);
 
-      await transaction.commit();
-      res.status(201).json(inserted.recordset[0]);
-    } catch (err) {
-      await transaction.rollback();
-      throw err;
+      await tx.commit();
+      return res.status(201).json(inserted.recordset[0]);
+    } catch (e) {
+      await tx.rollback();
+      throw e;
     }
-  } catch (error) {
-    if (error instanceof z.ZodError) {
-      return res.status(400).json({ message: "Erro de validação", errors: error.errors });
+  } catch (e) {
+    if (e instanceof z.ZodError) {
+      return res.status(400).json({ message: "Erro de validação", errors: e.errors });
     }
-    console.error("Erro ao criar lançamento:", error);
+    console.error("Erro ao criar lançamento:", e);
     res.status(500).json({ message: "Erro interno no servidor" });
   }
 };
 
+/** atualizar – não é usado no seu front, mas mantive compatível */
 export const updatePagamento = async (req: Request, res: Response) => {
   const { id } = req.params;
-
-  // Permitir atualizar apenas campos do lançamento (não muda cliente nem bloco aqui)
-  const updateSchema = pagamentoSchema
-    .omit({ cliente_id: true, bloco_id: true })
-    .partial();
+  const updateSchema = createSchema.omit({ cliente_id: true, bloco_id: true }).partial();
 
   try {
     const data = updateSchema.parse(req.body);
 
-    const fields = Object.keys(data)
-      .map((key) => {
-        // mapear nomes do schema para colunas
-        if (key === "forma_pagamento") return `tipo_recebimento = @${key}`;
-        if (key === "data_vencimento") return `bom_para = @${key}`;
-        if (key === "observacoes") return `observacao = @${key}`;
-        return `${key} = @${key}`;
-      })
-      .join(", ");
+    const pairs: string[] = [];
+    const reqDb = pool.request().input("id", Number(id));
 
-    if (!fields) {
-      return res.status(400).json({ message: "Nenhum campo para atualizar" });
+    // mapeia campos do payload -> colunas
+    for (const [k, v] of Object.entries(data)) {
+      if (v === undefined) continue;
+      if (k === "forma_pagamento") { pairs.push("tipo_recebimento=@forma_pagamento"); reqDb.input("forma_pagamento", String(v)); continue; }
+      if (k === "data_vencimento") { pairs.push("bom_para=@data_vencimento"); reqDb.input("data_vencimento", v as any); continue; }
+      if (k === "observacao")      { pairs.push("observacao=@observacao"); reqDb.input("observacao", v as any); continue; }
+      pairs.push(`${k}=@${k}`); reqDb.input(k, v as any);
     }
 
-    const request = pool.request().input("id", id);
+    if (!pairs.length) return res.status(400).json({ message: "Nenhum campo para atualizar" });
 
-    // bind com os nomes originais e o SQL faz o mapeamento ali em cima
-    Object.entries(data).forEach(([key, value]) => {
-      request.input(key, value as any);
-    });
-
-    const result = await request.query(`
+    const rs = await reqDb.query(`
       UPDATE bloco_lancamentos
-         SET ${fields}
+         SET ${pairs.join(", ")}
        OUTPUT INSERTED.*
-       WHERE id = @id
+       WHERE id=@id
     `);
-
-    if (result.recordset.length === 0) {
-      return res.status(404).json({ message: "Lançamento não encontrado" });
+    if (!rs.recordset.length) return res.status(404).json({ message: "Lançamento não encontrado" });
+    res.json(rs.recordset[0]);
+  } catch (e) {
+    if (e instanceof z.ZodError) {
+      return res.status(400).json({ message: "Erro de validação", errors: e.errors });
     }
-
-    res.json(result.recordset[0]);
-  } catch (error) {
-    if (error instanceof z.ZodError) {
-      return res.status(400).json({ message: "Erro de validação", errors: error.errors });
-    }
-    console.error("Erro ao atualizar lançamento:", error);
+    console.error("Erro ao atualizar lançamento:", e);
     res.status(500).json({ message: "Erro interno no servidor" });
   }
 };
@@ -246,73 +204,69 @@ export const updatePagamento = async (req: Request, res: Response) => {
 export const deletePagamento = async (req: Request, res: Response) => {
   const { id } = req.params;
   try {
-    const result = await pool
-      .request()
-      .input("id", id)
-      .query("DELETE FROM bloco_lancamentos WHERE id = @id");
-
-    if (result.rowsAffected[0] === 0) {
+    const rs = await pool.request().input("id", Number(id))
+      .query("DELETE FROM bloco_lancamentos WHERE id=@id");
+    if ((rs.rowsAffected?.[0] ?? 0) === 0) {
       return res.status(404).json({ message: "Lançamento não encontrado" });
     }
-
     res.status(204).send();
-  } catch (error: any) {
-    // FK para fechamento_itens pode bloquear exclusão
-    if (error?.number === 547) {
-      return res
-        .status(409)
-        .json({ message: "Não é possível excluir: lançamento já vinculado a fechamento do dia." });
+  } catch (e: any) {
+    if (e?.number === 547) {
+      return res.status(409).json({ message: "Não é possível excluir: lançamento vinculado a fechamento." });
     }
-    console.error("Erro ao deletar lançamento:", error);
+    console.error("Erro ao deletar lançamento:", e);
     res.status(500).json({ message: "Erro interno no servidor" });
   }
 };
 
-// Saldo consolidado do cliente em blocos ABERTOS
+/** saldo consolidado em blocos ABERTOS (mantido) */
 export const getSaldo = async (req: Request, res: Response) => {
   const { cliente_id } = req.params;
-
   try {
-    const result = await pool
-      .request()
+    const rs = await pool.request()
       .input("cliente_id", Number(cliente_id))
       .query(`
-        SELECT COALESCE(SUM(v.saldo), 0) AS saldo
+        SELECT COALESCE(SUM(v.saldo),0) AS saldo
         FROM vw_blocos_saldo v
         JOIN blocos b ON b.id = v.bloco_id
-        WHERE b.cliente_id = @cliente_id
-          AND b.status = 'ABERTO'
+        WHERE b.cliente_id=@cliente_id AND b.status='ABERTO'
       `);
-
-    res.json({ saldo: result.recordset[0].saldo });
-  } catch (error) {
-    console.error("Erro ao buscar saldo:", error);
+    res.json({ saldo: rs.recordset[0].saldo });
+  } catch (e) {
+    console.error("Erro ao buscar saldo:", e);
     res.status(500).json({ message: "Erro interno no servidor" });
   }
 };
 
-// Histórico de lançamentos do cliente (todos os blocos)
+/** histórico – compatível com HistoricoPagamentos do front */
 export const getHistorico = async (req: Request, res: Response) => {
-  const { cliente_id } = req.params;
-
+  // aceita: GET /pagamentos/historico?cliente_id=123 (se não vier, lista todos)
+  const { cliente_id } = req.query as { cliente_id?: string };
   try {
-    const result = await pool
-      .request()
-      .input("cliente_id", Number(cliente_id))
-      .query(`
-        SELECT bl.*,
-               b.id AS bloco_id,
-               b.codigo AS codigo_bloco,
-               b.status AS status_bloco
-        FROM bloco_lancamentos bl
-        JOIN blocos b ON bl.bloco_id = b.id
-        WHERE b.cliente_id = @cliente_id
-        ORDER BY bl.data_lancamento DESC, bl.id DESC
-      `);
+    const reqDb = pool.request();
+    let where = "1=1";
+    if (cliente_id && cliente_id !== "") {
+      where += " AND b.cliente_id=@cliente_id";
+      reqDb.input("cliente_id", Number(cliente_id));
+    }
 
-    res.json(result.recordset);
-  } catch (error) {
-    console.error("Erro ao buscar histórico:", error);
+    const rs = await reqDb.query(`
+      SELECT
+        bl.id,
+        b.cliente_id,
+        bl.valor,
+        bl.tipo_recebimento AS forma_pagamento,
+        bl.criado_em,
+        bl.observacao
+      FROM bloco_lancamentos bl
+      JOIN blocos b ON b.id = bl.bloco_id
+      WHERE ${where}
+      ORDER BY bl.criado_em DESC, bl.id DESC
+    `);
+
+    res.json(rs.recordset);
+  } catch (e) {
+    console.error("Erro ao buscar histórico:", e);
     res.status(500).json({ message: "Erro interno no servidor" });
   }
 };

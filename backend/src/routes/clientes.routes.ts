@@ -6,6 +6,7 @@ import {
   createCliente,
   updateCliente,
   deleteCliente,
+  listClienteDocumentos,
   createClienteDocumento,
   updateClienteDocumento,
   deleteClienteDocumento,
@@ -26,8 +27,10 @@ router
   .put(authorize("admin", "financeiro"), updateCliente)
   .delete(authorize("admin"), deleteCliente);
 
+// documentos & links
 router
   .route("/:cliente_id/documentos")
+  .get(authorize("admin", "financeiro", "vendedor"), listClienteDocumentos)
   .post(authorize("admin", "financeiro"), createClienteDocumento);
 
 router

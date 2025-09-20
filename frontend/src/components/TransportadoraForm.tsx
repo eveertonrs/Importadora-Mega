@@ -1,208 +1,198 @@
 // src/components/TransportadoraForm.tsx
-import React, { useState } from "react";
-import axios from "axios";
+import { useEffect, useState } from "react";
+import api from "../services/api";
 
-const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:3333";
+type Transp = {
+  id: number;
+  razao_social: string;
+  cnpj?: string | null;
+  forma_envio?: string | null;
+  telefone?: string | null;
+  endereco?: string | null;
+  referencia?: string | null;
+  ativo: boolean;
+};
 
-const TransportadoraForm: React.FC = () => {
+export default function TransportadoraForm() {
+  const [rows, setRows] = useState<Transp[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  // form
   const [razaoSocial, setRazaoSocial] = useState("");
   const [cnpj, setCnpj] = useState("");
   const [formaEnvio, setFormaEnvio] = useState("");
   const [telefone, setTelefone] = useState("");
   const [endereco, setEndereco] = useState("");
   const [referencia, setReferencia] = useState("");
-  const [ativo, setAtivo] = useState(true);
 
-  const [error, setError] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
-
-  const resetForm = () => {
-    setRazaoSocial("");
-    setCnpj("");
-    setFormaEnvio("");
-    setTelefone("");
-    setEndereco("");
-    setReferencia("");
-    setAtivo(true);
-  };
-
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError(null);
-
-    if (!razaoSocial.trim()) {
-      setError("Razão Social é obrigatória.");
-      return;
-    }
-
-    const token = localStorage.getItem("token");
-    if (!token) {
-      setError("Você precisa estar autenticado para cadastrar.");
-      return;
-    }
-
+  async function load() {
+    setLoading(true);
     try {
-      setSaving(true);
-      await axios.post(
-        `${API_URL}/transportadoras`,
-        {
-          razao_social: razaoSocial.trim(),
-          cnpj: cnpj.trim() || null,
-          forma_envio: formaEnvio.trim() || null,
-          telefone: telefone.trim() || null,
-          endereco: endereco.trim() || null,
-          referencia: referencia.trim() || null,
-          ativo,
-        },
-        {
-          headers: { Authorization: `Bearer ${token}` },
-        }
-      );
-
-      alert("Transportadora cadastrada com sucesso!");
-      resetForm();
-    } catch (err) {
-      if (axios.isAxiosError(err)) {
-        if (err.response?.status === 401) {
-          setError("Sessão expirada. Faça login novamente.");
-        } else {
-          setError(err.response?.data?.message || "Erro ao cadastrar transportadora");
-        }
-      } else if (err instanceof Error) {
-        setError(err.message);
-      } else {
-        setError("Ocorreu um erro. Tente novamente.");
-      }
-      console.error("Erro no cadastro de transportadora:", err);
+      const { data } = await api.get("/transportadoras");
+      setRows(data?.data ?? data ?? []);
     } finally {
-      setSaving(false);
+      setLoading(false);
     }
-  };
+  }
+
+  useEffect(() => {
+    load();
+  }, []);
+
+  async function save() {
+    if (!razaoSocial.trim()) return;
+
+    setLoading(true);
+    try {
+      await api.post("/transportadoras", {
+        razao_social: razaoSocial.trim(),
+        cnpj: cnpj.trim() || null,
+        forma_envio: formaEnvio.trim() || null,
+        telefone: telefone.trim() || null,
+        endereco: endereco.trim() || null,
+        referencia: referencia.trim() || null,
+        ativo: true,
+      });
+      // reset
+      setRazaoSocial("");
+      setCnpj("");
+      setFormaEnvio("");
+      setTelefone("");
+      setEndereco("");
+      setReferencia("");
+      await load();
+    } finally {
+      setLoading(false);
+    }
+  }
 
   return (
-    <div className="bg-white shadow rounded-lg p-4">
-      <h2 className="text-xl font-semibold mb-4">Nova Transportadora</h2>
-      {error && <p className="text-red-500 mb-2">{error}</p>}
-      <form onSubmit={handleSubmit} className="space-y-4">
-        <div>
-          <label htmlFor="razaoSocial" className="block text-gray-700 text-sm font-bold mb-2">
-            Razão Social *
-          </label>
-          <input
-            type="text"
-            id="razaoSocial"
-            name="razaoSocial"
-            required
-            className="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700
-                       leading-tight focus:outline-none focus:shadow-outline"
-            value={razaoSocial}
-            onChange={(e) => setRazaoSocial(e.target.value)}
-          />
+    <div className="space-y-4">
+      <h1 className="text-xl font-semibold">Transportadoras</h1>
+
+      {/* FORM */}
+      <div className="rounded-lg border bg-white p-4 shadow-sm space-y-4">
+        <div className="grid gap-3 md:grid-cols-2">
+          <div className="md:col-span-2">
+            <label className="text-sm font-medium">Razão social*</label>
+            <input
+              className="mt-1 w-full rounded border px-3 py-2"
+              placeholder="Ex.: Trans Metal LTDA"
+              value={razaoSocial}
+              onChange={(e) => setRazaoSocial(e.target.value)}
+              required
+            />
+          </div>
+
+          <div>
+            <label className="text-sm font-medium">CNPJ</label>
+            <input
+              className="mt-1 w-full rounded border px-3 py-2"
+              placeholder="00.000.000/0000-00"
+              value={cnpj}
+              onChange={(e) => setCnpj(e.target.value)}
+            />
+          </div>
+
+          <div>
+            <label className="text-sm font-medium">Forma de envio</label>
+            <input
+              className="mt-1 w-full rounded border px-3 py-2"
+              placeholder="Ex.: Rodoviário, Retira, Motoboy..."
+              value={formaEnvio}
+              onChange={(e) => setFormaEnvio(e.target.value)}
+            />
+          </div>
+
+          <div>
+            <label className="text-sm font-medium">Telefone</label>
+            <input
+              className="mt-1 w-full rounded border px-3 py-2"
+              placeholder="(00) 00000-0000"
+              value={telefone}
+              onChange={(e) => setTelefone(e.target.value)}
+            />
+          </div>
+
+          <div>
+            <label className="text-sm font-medium">Referência (p/ motorista)</label>
+            <input
+              className="mt-1 w-full rounded border px-3 py-2"
+              placeholder="Ex.: Próximo ao galpão azul"
+              value={referencia}
+              onChange={(e) => setReferencia(e.target.value)}
+            />
+          </div>
+
+          <div className="md:col-span-2">
+            <label className="text-sm font-medium">Endereço</label>
+            <input
+              className="mt-1 w-full rounded border px-3 py-2"
+              placeholder="Rua/Av, nº, bairro, cidade/UF"
+              value={endereco}
+              onChange={(e) => setEndereco(e.target.value)}
+            />
+          </div>
         </div>
 
-        <div>
-          <label htmlFor="cnpj" className="block text-gray-700 text-sm font-bold mb-2">
-            CNPJ
-          </label>
-          <input
-            type="text"
-            id="cnpj"
-            name="cnpj"
-            placeholder="00.000.000/0000-00"
-            className="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700
-                       leading-tight focus:outline-none focus:shadow-outline"
-            value={cnpj}
-            onChange={(e) => setCnpj(e.target.value)}
-          />
+        <div className="pt-1">
+          <button
+            onClick={save}
+            disabled={loading || !razaoSocial.trim()}
+            className="rounded bg-blue-600 px-4 py-2 font-medium text-white hover:bg-blue-700 disabled:opacity-50"
+          >
+            {loading ? "Salvando…" : "Salvar"}
+          </button>
         </div>
+      </div>
 
-        <div>
-          <label htmlFor="formaEnvio" className="block text-gray-700 text-sm font-bold mb-2">
-            Forma de Envio
-          </label>
-          <input
-            type="text"
-            id="formaEnvio"
-            name="formaEnvio"
-            placeholder="Ex.: Rodoviário, Motoboy, Correios..."
-            className="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700
-                       leading-tight focus:outline-none focus:shadow-outline"
-            value={formaEnvio}
-            onChange={(e) => setFormaEnvio(e.target.value)}
-          />
-        </div>
+      {/* GRID */}
+      <div className="overflow-x-auto rounded-lg border bg-white shadow-sm">
+        <table className="w-full text-sm">
+          <thead className="bg-gray-50 text-left">
+            <tr>
+              <th className="p-2 border">#</th>
+              <th className="p-2 border">Razão social</th>
+              <th className="p-2 border">CNPJ</th>
+              <th className="p-2 border">Forma envio</th>
+              <th className="p-2 border">Telefone</th>
+              <th className="p-2 border">Endereço</th>
+              <th className="p-2 border">Referência</th>
+              <th className="p-2 border">Ativo</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.map((t) => (
+              <tr key={t.id} className="hover:bg-gray-50">
+                <td className="p-2 border">{t.id}</td>
+                <td className="p-2 border">{t.razao_social}</td>
+                <td className="p-2 border">{t.cnpj ?? "-"}</td>
+                <td className="p-2 border">{t.forma_envio ?? "-"}</td>
+                <td className="p-2 border">{t.telefone ?? "-"}</td>
+                <td className="p-2 border">{t.endereco ?? "-"}</td>
+                <td className="p-2 border">{t.referencia ?? "-"}</td>
+                <td className="p-2 border">{t.ativo ? "Sim" : "Não"}</td>
+              </tr>
+            ))}
 
-        <div>
-          <label htmlFor="telefone" className="block text-gray-700 text-sm font-bold mb-2">
-            Telefone
-          </label>
-          <input
-            type="text"
-            id="telefone"
-            name="telefone"
-            placeholder="(00) 00000-0000"
-            className="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700
-                       leading-tight focus:outline-none focus:shadow-outline"
-            value={telefone}
-            onChange={(e) => setTelefone(e.target.value)}
-          />
-        </div>
+            {!loading && rows.length === 0 && (
+              <tr>
+                <td colSpan={8} className="p-4 text-center text-gray-500">
+                  Sem registros
+                </td>
+              </tr>
+            )}
 
-        <div>
-          <label htmlFor="endereco" className="block text-gray-700 text-sm font-bold mb-2">
-            Endereço
-          </label>
-          <input
-            type="text"
-            id="endereco"
-            name="endereco"
-            className="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700
-                       leading-tight focus:outline-none focus:shadow-outline"
-            value={endereco}
-            onChange={(e) => setEndereco(e.target.value)}
-          />
-        </div>
-
-        <div>
-          <label htmlFor="referencia" className="block text-gray-700 text-sm font-bold mb-2">
-            Referência
-          </label>
-          <input
-            type="text"
-            id="referencia"
-            name="referencia"
-            className="shadow appearance-none border rounded w-full py-2 px-3 text-gray-700
-                       leading-tight focus:outline-none focus:shadow-outline"
-            value={referencia}
-            onChange={(e) => setReferencia(e.target.value)}
-          />
-        </div>
-
-        <div className="flex items-center gap-2">
-          <input
-            type="checkbox"
-            id="ativo"
-            name="ativo"
-            className="h-4 w-4"
-            checked={ativo}
-            onChange={(e) => setAtivo(e.target.checked)}
-          />
-          <label htmlFor="ativo" className="text-gray-700 text-sm font-bold">
-            Ativo
-          </label>
-        </div>
-
-        <button
-          type="submit"
-          disabled={saving}
-          className="bg-blue-600 hover:bg-blue-700 disabled:opacity-70 disabled:cursor-not-allowed
-                     text-white font-bold py-2 px-4 rounded focus:outline-none focus:shadow-outline"
-        >
-          {saving ? "Salvando..." : "Salvar"}
-        </button>
-      </form>
+            {loading && (
+              <tr>
+                <td colSpan={8} className="p-4 text-center">
+                  Carregando…
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
-};
-
-export default TransportadoraForm;
+}

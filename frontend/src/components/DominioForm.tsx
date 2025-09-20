@@ -1,129 +1,140 @@
 // src/components/DominioForm.tsx
-import React, { useState } from "react";
-import axios from "axios";
+import { useState } from "react";
 import { useNavigate } from "react-router-dom";
+import api from "../services/api";
 
-const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:3333";
+export default function DominioForm() {
+  const nav = useNavigate();
 
-const DominioForm: React.FC = () => {
   const [chave, setChave] = useState("");
   const [nome, setNome] = useState("");
   const [ativo, setAtivo] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [saving, setSaving] = useState(false);
-  const navigate = useNavigate();
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  function slugify(input: string) {
+    return input
+      .toLowerCase()
+      .normalize("NFD")
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/[^a-z0-9]+/g, "_")
+      .replace(/^_+|_+$/g, "");
+  }
+
+  async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
 
-    if (!chave.trim() || !nome.trim()) {
+    const body = {
+      chave: (chave || slugify(nome)).trim(),
+      nome: nome.trim(),
+      ativo,
+    };
+
+    if (!body.chave || !body.nome) {
       setError("Informe a chave e o nome do domínio.");
       return;
     }
 
+    setSaving(true);
     try {
-      setSaving(true);
-      const token = localStorage.getItem("token");
-      if (!token) {
-        navigate("/login");
-        return;
-      }
-
-      await axios.post(
-        `${API_URL}/dominios`,
-        { chave: chave.trim(), nome: nome.trim(), ativo },
-        { headers: { Authorization: `Bearer ${token}` } }
-      );
-
+      await api.post("/dominios", body);
+      // feedback simples e volta para a lista
       alert("Domínio cadastrado com sucesso!");
-      setChave("");
-      setNome("");
-      setAtivo(true);
-      setError(null);
+      nav("/dominios");
     } catch (err: any) {
-      if (axios.isAxiosError(err)) {
-        if (err.response?.status === 401) {
-          navigate("/login");
-          return;
-        }
-        // se a chave já existir, o backend pode retornar 409 ou 400
-        setError(err.response?.data?.message || "Erro ao cadastrar domínio");
-      } else {
-        setError("Ocorreu um erro. Tente novamente.");
-      }
-      console.error("Erro ao cadastrar domínio:", err);
+      const message =
+        err?.response?.data?.message ||
+        (err?.response?.status === 409
+          ? "Já existe um domínio com essa chave."
+          : "Erro ao cadastrar domínio.");
+      setError(message);
+      console.error("DominioForm error:", err);
     } finally {
       setSaving(false);
     }
-  };
+  }
 
   return (
-    <div className="rounded-lg bg-white p-4 shadow">
-      <h2 className="mb-4 text-xl font-semibold">Novo Domínio</h2>
-      {error && <p className="mb-3 text-sm text-red-600">{error}</p>}
+    <div className="max-w-xl rounded-xl border bg-white p-4 md:p-6 shadow-sm">
+      <h1 className="mb-2 text-lg md:text-xl font-semibold">Novo domínio</h1>
+      <p className="mb-4 text-sm text-slate-500">
+        Cadastre chaves de domínio para listas de valores (ex.: formas de pagamento, entregas).
+      </p>
 
-      <form onSubmit={handleSubmit} className="space-y-4">
-        <div>
-          <label
-            htmlFor="chave"
-            className="mb-2 block text-sm font-bold text-gray-700"
-          >
-            Chave
-          </label>
-          <input
-            type="text"
-            id="chave"
-            name="chave"
-            className="w-full rounded border px-3 py-2 text-gray-700 shadow focus:outline-none focus:shadow-outline"
-            value={chave}
-            onChange={(e) => setChave(e.target.value)}
-            placeholder="Ex.: forma_pagamento, entrega, tipo_tabela..."
-          />
+      {error && (
+        <div className="mb-4 rounded-md border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+          {error}
         </div>
+      )}
 
+      <form onSubmit={onSubmit} className="space-y-4">
         <div>
-          <label
-            htmlFor="nome"
-            className="mb-2 block text-sm font-bold text-gray-700"
-          >
+          <label htmlFor="nome" className="text-sm text-slate-700">
             Nome
           </label>
           <input
-            type="text"
             id="nome"
-            name="nome"
-            className="w-full rounded border px-3 py-2 text-gray-700 shadow focus:outline-none focus:shadow-outline"
+            className="mt-1 w-full rounded border px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-200"
             value={nome}
             onChange={(e) => setNome(e.target.value)}
-            placeholder="Rótulo legível (ex.: Formas de Pagamento)"
+            placeholder="Ex.: Formas de Pagamento"
           />
+          <div className="mt-1 text-xs text-slate-500">
+            Dica: se a chave ficar vazia, geramos automaticamente a partir do nome.
+          </div>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div>
+          <label htmlFor="chave" className="text-sm text-slate-700">
+            Chave
+          </label>
+          <div className="mt-1 flex gap-2">
+            <input
+              id="chave"
+              className="flex-1 rounded border px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-200"
+              value={chave}
+              onChange={(e) => setChave(e.target.value)}
+              placeholder="Ex.: forma_pagamento, entrega, tipo_tabela…"
+            />
+            <button
+              type="button"
+              onClick={() => setChave(slugify(nome))}
+              className="whitespace-nowrap rounded border px-3 py-2 text-sm hover:bg-slate-50"
+            >
+              Gerar
+            </button>
+          </div>
+        </div>
+
+        <label className="flex items-center gap-2 select-none">
           <input
             type="checkbox"
-            id="ativo"
-            name="ativo"
             className="h-4 w-4"
             checked={ativo}
             onChange={(e) => setAtivo(e.target.checked)}
           />
-          <label htmlFor="ativo" className="text-sm font-bold text-gray-700">
-            Ativo
-          </label>
-        </div>
+          <span className="text-sm text-slate-700">Ativo</span>
+        </label>
 
-        <button
-          type="submit"
-          disabled={saving}
-          className="rounded bg-blue-600 px-4 py-2 font-bold text-white hover:bg-blue-700 focus:outline-none focus:shadow-outline disabled:cursor-not-allowed disabled:opacity-60"
-        >
-          {saving ? "Salvando..." : "Salvar"}
-        </button>
+        <div className="flex gap-2">
+          <button
+            type="submit"
+            disabled={saving}
+            className="rounded bg-blue-600 px-4 py-2 text-white hover:bg-blue-700 disabled:opacity-60"
+          >
+            {saving ? "Salvando…" : "Salvar"}
+          </button>
+          <button
+            type="button"
+            onClick={() => nav("/dominios")}
+            className="rounded border px-4 py-2 hover:bg-slate-50"
+          >
+            Cancelar
+          </button>
+        </div>
       </form>
     </div>
   );
-};
-
-export default DominioForm;
+}

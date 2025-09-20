@@ -1,4 +1,3 @@
-// src/components/DominioItemForm.tsx
 import React, { useState } from "react";
 import axios from "axios";
 import { useNavigate } from "react-router-dom";
@@ -8,6 +7,12 @@ interface DominioItemFormProps {
 }
 
 const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:3333";
+
+const Badge = ({ children }: { children: React.ReactNode }) => (
+  <span className="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200">
+    {children}
+  </span>
+);
 
 const DominioItemForm: React.FC<DominioItemFormProps> = ({ dominioId }) => {
   const [valor, setValor] = useState("");
@@ -21,7 +26,7 @@ const DominioItemForm: React.FC<DominioItemFormProps> = ({ dominioId }) => {
   const toIntOrZero = (s: string) => {
     const n = parseInt(s, 10);
     return Number.isNaN(n) ? 0 : n;
-    };
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -51,19 +56,16 @@ const DominioItemForm: React.FC<DominioItemFormProps> = ({ dominioId }) => {
         { headers: { Authorization: `Bearer ${token}` } }
       );
 
-      alert("Item do domínio cadastrado com sucesso!");
       setValor("");
       setCodigo("");
       setOrdem("0");
       setAtivo(true);
-      setError(null);
     } catch (err: any) {
       if (axios.isAxiosError(err)) {
         if (err.response?.status === 401) {
           navigate("/login");
           return;
         }
-        // domínio possui índice único (dominio_id, valor)
         setError(
           err.response?.data?.message ||
             "Erro ao cadastrar item do domínio. Verifique se já não existe um item com esse valor."
@@ -78,60 +80,56 @@ const DominioItemForm: React.FC<DominioItemFormProps> = ({ dominioId }) => {
   };
 
   return (
-    <div className="bg-white shadow rounded-lg p-4">
-      <h2 className="text-xl font-semibold mb-4">Novo Item do Domínio</h2>
-      {error && <p className="text-red-600 text-sm mb-3">{error}</p>}
+    <div className="bg-white shadow rounded-lg p-4 space-y-4">
+      <div className="flex items-center justify-between">
+        <h2 className="text-xl font-semibold">Novo item do domínio</h2>
+        {ativo && <Badge>Ativo</Badge>}
+      </div>
+
+      {error && (
+        <div className="rounded border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-700">
+          {error}
+        </div>
+      )}
 
       <form onSubmit={handleSubmit} className="space-y-4">
         <div>
-          <label
-            htmlFor="valor"
-            className="block text-gray-700 text-sm font-bold mb-2"
-          >
+          <label htmlFor="valor" className="block text-sm font-medium text-slate-700">
             Valor *
           </label>
-          <input
-            type="text"
+        <input
             id="valor"
-            name="valor"
+            type="text"
             placeholder="Ex.: BOLETO 30/60/90"
-            className="shadow appearance-none border rounded w-full px-3 py-2 text-gray-700 leading-tight focus:outline-none focus:shadow-outline"
+            className="mt-1 w-full rounded border px-3 py-2 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
             value={valor}
             onChange={(e) => setValor(e.target.value)}
           />
         </div>
 
         <div>
-          <label
-            htmlFor="codigo"
-            className="block text-gray-700 text-sm font-bold mb-2"
-          >
+          <label htmlFor="codigo" className="block text-sm font-medium text-slate-700">
             Código (opcional)
           </label>
           <input
-            type="text"
             id="codigo"
-            name="codigo"
+            type="text"
             placeholder="Ex.: COD-BOLETO-306090"
-            className="shadow appearance-none border rounded w-full px-3 py-2 text-gray-700 leading-tight focus:outline-none focus:shadow-outline"
+            className="mt-1 w-full rounded border px-3 py-2 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
             value={codigo}
             onChange={(e) => setCodigo(e.target.value)}
           />
         </div>
 
         <div>
-          <label
-            htmlFor="ordem"
-            className="block text-gray-700 text-sm font-bold mb-2"
-          >
+          <label htmlFor="ordem" className="block text-sm font-medium text-slate-700">
             Ordem
           </label>
           <input
-            type="number"
             id="ordem"
-            name="ordem"
+            type="number"
             min={0}
-            className="shadow appearance-none border rounded w-full px-3 py-2 text-gray-700 leading-tight focus:outline-none focus:shadow-outline"
+            className="mt-1 w-full rounded border px-3 py-2 shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
             value={ordem}
             onChange={(e) => setOrdem(e.target.value)}
           />
@@ -139,25 +137,39 @@ const DominioItemForm: React.FC<DominioItemFormProps> = ({ dominioId }) => {
 
         <div className="flex items-center gap-2">
           <input
-            type="checkbox"
             id="ativo"
-            name="ativo"
+            type="checkbox"
             className="h-4 w-4"
             checked={ativo}
             onChange={(e) => setAtivo(e.target.checked)}
           />
-          <label htmlFor="ativo" className="text-sm font-bold text-gray-700">
+          <label htmlFor="ativo" className="text-sm font-medium text-slate-700">
             Ativo
           </label>
         </div>
 
-        <button
-          type="submit"
-          disabled={saving}
-          className="bg-blue-600 hover:bg-blue-700 disabled:opacity-60 disabled:cursor-not-allowed text-white font-bold py-2 px-4 rounded focus:outline-none focus:shadow-outline"
-        >
-          {saving ? "Salvando..." : "Salvar"}
-        </button>
+        <div className="flex gap-2">
+          <button
+            type="submit"
+            disabled={saving}
+            className="rounded bg-blue-600 px-4 py-2 font-semibold text-white hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:opacity-60"
+          >
+            {saving ? "Salvando..." : "Salvar"}
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setValor("");
+              setCodigo("");
+              setOrdem("0");
+              setAtivo(true);
+              setError(null);
+            }}
+            className="rounded border px-4 py-2 hover:bg-slate-50"
+          >
+            Limpar
+          </button>
+        </div>
       </form>
     </div>
   );

@@ -1,223 +1,275 @@
 // src/components/ClienteForm.tsx
-import React, { useState } from "react";
-import axios from "axios";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { useNavigate, useParams } from "react-router-dom";
+import api from "../services/api";
 
-const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:3333";
+type ClientePayload = {
+  nome_fantasia: string;
+  tabela_preco?: string | null;
+  grupo_empresa?: string | null;
+  whatsapp?: string | null;
+  anotacoes?: string | null;
+  status?: "ATIVO" | "INATIVO";
+  recebe_whatsapp?: boolean;
+};
 
-const ClienteForm: React.FC = () => {
-  // colunas reais da tabela `clientes`
-  const [nomeFantasia, setNomeFantasia] = useState("");
-  const [grupoEmpresa, setGrupoEmpresa] = useState("");
-  const [tabelaPreco, setTabelaPreco] = useState("");
-  const [whatsapp, setWhatsapp] = useState("");
-  const [anotacoes, setAnotacoes] = useState("");
+const TABELAS = ["ATACADAO", "ESPECIAL"] as const;
 
-  // opcional: criar documento principal (CPF/CNPJ) após criar o cliente
-  const [docNumero, setDocNumero] = useState("");
+export default function ClienteForm() {
+  const { id } = useParams();
+  const nav = useNavigate();
+  const editing = Boolean(id);
 
-  const [error, setError] = useState<string | null>(null);
-  const [okMsg, setOkMsg] = useState<string | null>(null);
-  const [submitting, setSubmitting] = useState(false);
+  const [form, setForm] = useState<ClientePayload>({
+    nome_fantasia: "",
+    tabela_preco: "ATACADAO",
+    status: "ATIVO",
+    recebe_whatsapp: false,
+  });
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+  const [ok, setOk] = useState(false);
 
-  const onlyDigits = (s: string) => s.replace(/\D+/g, "");
-  const inferDocTipo = (val: string): "CPF" | "CNPJ" | null => {
-    const d = onlyDigits(val);
-    if (d.length === 11) return "CPF";
-    if (d.length === 14) return "CNPJ";
-    return null;
-  };
+  const titulo = useMemo(
+    () => (editing ? `Editar cliente #${id}` : "Novo cliente"),
+    [editing, id]
+  );
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setError(null);
-    setOkMsg(null);
-
-    if (!nomeFantasia.trim()) {
-      setError("Informe o Nome Fantasia.");
-      return;
-    }
-    if (!tabelaPreco) {
-      setError("Selecione a Tabela de Preço.");
-      return;
-    }
-
+  async function load() {
+    if (!editing) return;
+    setLoading(true);
+    setErr(null);
     try {
-      setSubmitting(true);
-      const token = localStorage.getItem("token");
-      if (!token) {
-        window.location.href = "/login";
+      const { data } = await api.get(`/clientes/${id}`);
+      setForm({
+        nome_fantasia: data.nome_fantasia ?? "",
+        tabela_preco: data.tabela_preco ?? null,
+        grupo_empresa: data.grupo_empresa ?? null,
+        whatsapp: data.whatsapp ?? null,
+        anotacoes: data.anotacoes ?? null,
+        status: data.status ?? "ATIVO",
+        recebe_whatsapp: Boolean(data.recebe_whatsapp),
+      });
+    } catch (e: any) {
+      setErr(e?.response?.data?.message || "Falha ao carregar o cliente.");
+    } finally {
+      setLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id]);
+
+  const onSubmit = useCallback(
+    async (e: React.FormEvent) => {
+      e.preventDefault();
+      if (!form.nome_fantasia?.trim()) {
+        setErr("Informe o nome fantasia.");
         return;
       }
 
-      // 1) cria o cliente (apenas campos existentes no backend)
-      const createResp = await axios.post(
-        `${API_URL}/clientes`,
-        {
-          nome_fantasia: nomeFantasia,
-          grupo_empresa: grupoEmpresa || null,
-          tabela_preco: tabelaPreco,
-          // status tem default 'ATIVO' no banco — pode omitir
-          whatsapp: onlyDigits(whatsapp) || null,
-          anotacoes: anotacoes || null,
-          links_json: null, // se quiser, pode omitir também
-        },
-        { headers: { Authorization: `Bearer ${token}` } }
-      );
-
-      const created = createResp.data?.data ?? createResp.data;
-      const clienteId = created.id;
-
-      // 2) se informou CPF/CNPJ, cria o documento principal
-      const digits = onlyDigits(docNumero);
-      if (digits) {
-        const tipo = inferDocTipo(digits);
-        if (!tipo) {
-          setError(
-            "Documento inválido. Use 11 dígitos para CPF ou 14 para CNPJ."
-          );
-          return;
-        }
-        await axios.post(
-          `${API_URL}/clientes/${clienteId}/documentos`,
-          { doc_tipo: tipo, doc_numero: digits, principal: true },
-          { headers: { Authorization: `Bearer ${token}` } }
-        );
-      }
-
-      setOkMsg("Cliente cadastrado com sucesso!");
-      // limpa o formulário
-      setNomeFantasia("");
-      setGrupoEmpresa("");
-      setTabelaPreco("");
-      setWhatsapp("");
-      setAnotacoes("");
-      setDocNumero("");
-    } catch (err: any) {
-      if (axios.isAxiosError(err)) {
-        const data = err.response?.data as any;
-        if (Array.isArray(data?.errors) && data.errors.length) {
-          // erros do Zod no backend
-          setError(data.errors.map((e: any) => e.message).join(" | "));
-        } else if (data?.message) {
-          setError(data.message);
-        } else if (err.response?.status === 401) {
-          window.location.href = "/login";
-          return;
+      setLoading(true);
+      setErr(null);
+      setOk(false);
+      try {
+        if (editing) {
+          await api.put(`/clientes/${id}`, form);
+          setOk(true);
+          setTimeout(() => nav(-1), 400);
         } else {
-          setError("Erro ao cadastrar cliente.");
+          const r = await api.post("/clientes", form);
+          const newId = r.data?.id ?? r.data?.data?.id;
+          setOk(true);
+          setTimeout(() => {
+            if (newId) nav(`/clientes/${newId}`);
+            else nav(-1);
+          }, 400);
         }
-      } else {
-        setError("Ocorreu um erro. Tente novamente.");
+      } catch (e: any) {
+        setErr(e?.response?.data?.message || "Falha ao salvar o cliente.");
+      } finally {
+        setLoading(false);
       }
-      console.error("Erro no cadastro de cliente:", err);
-    } finally {
-      setSubmitting(false);
-    }
-  };
+    },
+    [editing, form, id, nav]
+  );
 
   return (
-    <div className="rounded-xl border bg-white p-4 shadow">
-      <h2 className="mb-4 text-xl font-semibold">Novo Cliente</h2>
-
-      {error && <p className="mb-3 text-sm text-red-600">Erro de validação: {error}</p>}
-      {okMsg && <p className="mb-3 text-sm text-green-600">{okMsg}</p>}
-
-      <form onSubmit={handleSubmit} className="space-y-4">
-        <div>
-          <label htmlFor="nome_fantasia" className="mb-1 block text-sm font-bold text-gray-700">
-            Nome Fantasia
-          </label>
-          <input
-            id="nome_fantasia"
-            className="w-full rounded border px-3 py-2"
-            value={nomeFantasia}
-            onChange={(e) => setNomeFantasia(e.target.value)}
-          />
-        </div>
-
-        <div>
-          <label htmlFor="grupo_empresa" className="mb-1 block text-sm font-bold text-gray-700">
-            Grupo / Empresa
-          </label>
-          <input
-            id="grupo_empresa"
-            className="w-full rounded border px-3 py-2"
-            value={grupoEmpresa}
-            onChange={(e) => setGrupoEmpresa(e.target.value)}
-          />
-        </div>
-
-        <div>
-          <label htmlFor="tabela_preco" className="mb-1 block text-sm font-bold text-gray-700">
-            Tabela de Preço
-          </label>
-          <select
-            id="tabela_preco"
-            className="w-full rounded border px-3 py-2"
-            value={tabelaPreco}
-            onChange={(e) => setTabelaPreco(e.target.value)}
-          >
-            <option value="">Selecione</option>
-            <option value="ESPECIAL">Especial</option>
-            <option value="ATACADAO">Atacadão</option>
-            {/* se preferir, carregue essas opções de /dominios */}
-          </select>
-        </div>
-
-        <div>
-          <label htmlFor="whatsapp" className="mb-1 block text-sm font-bold text-gray-700">
-            WhatsApp
-          </label>
-          <input
-            id="whatsapp"
-            className="w-full rounded border px-3 py-2"
-            value={whatsapp}
-            onChange={(e) => setWhatsapp(e.target.value)}
-            placeholder="(apenas números)"
-            inputMode="numeric"
-          />
-        </div>
-
-        <div>
-          <label htmlFor="anotacoes" className="mb-1 block text-sm font-bold text-gray-700">
-            Anotações
-          </label>
-          <textarea
-            id="anotacoes"
-            className="w-full rounded border px-3 py-2"
-            rows={3}
-            value={anotacoes}
-            onChange={(e) => setAnotacoes(e.target.value)}
-          />
-        </div>
-
-        <div className="border-t pt-4">
-          <h3 className="mb-2 text-sm font-semibold text-gray-700">
-            (Opcional) Criar documento principal agora
-          </h3>
-          <label htmlFor="doc" className="mb-1 block text-xs font-semibold uppercase text-gray-600">
-            CPF/CNPJ
-          </label>
-          <input
-            id="doc"
-            className="w-full rounded border px-3 py-2"
-            placeholder="Apenas números (11 p/ CPF, 14 p/ CNPJ)"
-            value={docNumero}
-            onChange={(e) => setDocNumero(e.target.value)}
-            inputMode="numeric"
-          />
-        </div>
-
+    <div className="max-w-3xl">
+      <div className="mb-4 flex items-center gap-2">
         <button
-          type="submit"
-          disabled={submitting}
-          className="rounded bg-blue-600 px-4 py-2 text-white hover:bg-blue-700 disabled:opacity-60"
+          type="button"
+          onClick={() => nav(-1)}
+          className="px-3 py-2 rounded-md border hover:bg-slate-50"
         >
-          {submitting ? "Salvando..." : "Salvar"}
+          ← Voltar
         </button>
+        <h1 className="text-xl font-semibold">{titulo}</h1>
+      </div>
+
+      <form
+        onSubmit={onSubmit}
+        className="rounded-xl border bg-white p-5 shadow-sm space-y-5"
+        onKeyDown={(e) => {
+          if ((e.ctrlKey || e.metaKey) && e.key === "Enter") onSubmit(e as any);
+        }}
+      >
+        {err && (
+          <div className="text-sm text-red-700 bg-red-50 border border-red-200 rounded p-3">
+            {err}
+          </div>
+        )}
+        {ok && (
+          <div className="text-sm text-emerald-700 bg-emerald-50 border border-emerald-200 rounded p-3">
+            Cliente salvo com sucesso!
+          </div>
+        )}
+
+        {/* Identificação */}
+        <section className="space-y-3">
+          <h2 className="font-medium text-slate-800">Identificação</h2>
+          <div className="grid md:grid-cols-2 gap-4">
+            <div>
+              <label className="text-sm text-slate-600">Nome fantasia *</label>
+              <input
+                className="mt-1 border rounded-md px-3 py-2 w-full focus:outline-none focus:ring-2 focus:ring-blue-200"
+                required
+                value={form.nome_fantasia}
+                onChange={(e) =>
+                  setForm((s) => ({ ...s, nome_fantasia: e.target.value }))
+                }
+                autoFocus
+              />
+            </div>
+
+            <div>
+              <label className="text-sm text-slate-600">Grupo empresa</label>
+              <input
+                className="mt-1 border rounded-md px-3 py-2 w-full focus:outline-none focus:ring-2 focus:ring-blue-200"
+                value={form.grupo_empresa ?? ""}
+                onChange={(e) =>
+                  setForm((s) => ({
+                    ...s,
+                    grupo_empresa: e.target.value || null,
+                  }))
+                }
+                placeholder="ex.: Grupo XPTO"
+              />
+            </div>
+          </div>
+        </section>
+
+        {/* Comercial */}
+        <section className="space-y-3">
+          <h2 className="font-medium text-slate-800">Comercial</h2>
+          <div className="grid md:grid-cols-3 gap-4">
+            <div>
+              <label className="text-sm text-slate-600">Tabela de preço</label>
+              <select
+                className="mt-1 border rounded-md px-3 py-2 w-full focus:outline-none focus:ring-2 focus:ring-blue-200"
+                value={form.tabela_preco ?? ""}
+                onChange={(e) =>
+                  setForm((s) => ({
+                    ...s,
+                    tabela_preco: e.target.value || null,
+                  }))
+                }
+              >
+                <option value="">(nenhuma)</option>
+                {TABELAS.map((t) => (
+                  <option key={t} value={t}>
+                    {t === "ATACADAO" ? "ATACADÃO" : t}
+                  </option>
+                ))}
+              </select>
+            </div>
+
+            <div>
+              <label className="text-sm text-slate-600">Status</label>
+              <select
+                className="mt-1 border rounded-md px-3 py-2 w-full focus:outline-none focus:ring-2 focus:ring-blue-200"
+                value={form.status ?? "ATIVO"}
+                onChange={(e) =>
+                  setForm((s) => ({
+                    ...s,
+                    status: (e.target.value as "ATIVO" | "INATIVO") ?? "ATIVO",
+                  }))
+                }
+              >
+                <option value="ATIVO">ATIVO</option>
+                <option value="INATIVO">INATIVO</option>
+              </select>
+            </div>
+
+            <div className="flex items-end gap-2">
+              <input
+                id="recebe_wpp"
+                type="checkbox"
+                className="h-4 w-4 rounded border-slate-300"
+                checked={!!form.recebe_whatsapp}
+                onChange={(e) =>
+                  setForm((s) => ({ ...s, recebe_whatsapp: e.target.checked }))
+                }
+              />
+              <label htmlFor="recebe_wpp" className="text-sm text-slate-700">
+                Recebe avisos por WhatsApp
+              </label>
+            </div>
+          </div>
+        </section>
+
+        {/* Contato */}
+        <section className="space-y-3">
+          <h2 className="font-medium text-slate-800">Contato</h2>
+          <div className="grid md:grid-cols-2 gap-4">
+            <div>
+              <label className="text-sm text-slate-600">WhatsApp</label>
+              <input
+                className="mt-1 border rounded-md px-3 py-2 w-full focus:outline-none focus:ring-2 focus:ring-blue-200"
+                value={form.whatsapp ?? ""}
+                onChange={(e) =>
+                  setForm((s) => ({ ...s, whatsapp: e.target.value || null }))
+                }
+                placeholder="(00) 90000-0000"
+              />
+            </div>
+          </div>
+        </section>
+
+        {/* Anotações */}
+        <section className="space-y-3">
+          <h2 className="font-medium text-slate-800">Anotações</h2>
+          <textarea
+            className="mt-1 border rounded-md px-3 py-2 w-full min-h-[120px] focus:outline-none focus:ring-2 focus:ring-blue-200"
+            value={form.anotacoes ?? ""}
+            onChange={(e) =>
+              setForm((s) => ({ ...s, anotacoes: e.target.value || null }))
+            }
+            placeholder="Observações gerais, preferências, restrições…"
+          />
+        </section>
+
+        {/* Ações */}
+        <div className="flex gap-2 pt-2">
+          <button
+            type="submit"
+            disabled={loading}
+            className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50"
+            title="Ctrl+Enter para salvar"
+          >
+            {loading ? "Salvando..." : "Salvar"}
+          </button>
+          <button
+            type="button"
+            onClick={() => nav(-1)}
+            className="px-4 py-2 bg-slate-100 rounded-md hover:bg-slate-200"
+          >
+            Cancelar
+          </button>
+        </div>
       </form>
     </div>
   );
-};
-
-export default ClienteForm;
+}

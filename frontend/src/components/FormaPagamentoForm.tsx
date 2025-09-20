@@ -1,119 +1,187 @@
 // src/components/FormaPagamentoForm.tsx
-import React, { useState } from "react";
-import axios from "axios";
-import { useNavigate } from "react-router-dom";
+import { useEffect, useMemo, useState } from "react";
+import api from "../services/api";
 
-const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:3333";
+type Forma = { id: number; descricao: string; ativo: boolean };
 
-const FormaPagamentoForm: React.FC = () => {
-  const [nome, setNome] = useState("");
-  const [ativo, setAtivo] = useState(true);
+export default function FormaPagamentoForm() {
+  const [rows, setRows] = useState<Forma[]>([]);
+  const [descricao, setDescricao] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState<string | null>(null);
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const navigate = useNavigate();
+  const [filter, setFilter] = useState("");
 
-  const handleSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
+  const filtered = useMemo(() => {
+    const q = filter.trim().toLowerCase();
+    if (!q) return rows;
+    return rows.filter(
+      (r) =>
+        r.descricao.toLowerCase().includes(q) ||
+        String(r.id).includes(q) ||
+        (r.ativo ? "sim" : "não").includes(q)
+    );
+  }, [rows, filter]);
+
+  async function load() {
+    setLoading(true);
     setError(null);
-    setSuccess(null);
-
-    if (!nome.trim()) {
-      setError("Informe o nome da forma de pagamento.");
-      return;
-    }
-
     try {
-      setIsSubmitting(true);
-      const token = localStorage.getItem("token");
-
-      await axios.post(
-        `${API_URL}/formas-pagamento`,
-        { nome: nome.trim(), ativo },
-        { headers: { Authorization: `Bearer ${token}` } }
-      );
-
-      setSuccess("Forma de pagamento cadastrada com sucesso!");
-      setNome("");
-      setAtivo(true);
-    } catch (err: unknown) {
-      if (axios.isAxiosError(err)) {
-        if (err.response?.status === 401) {
-          // token inválido/expirado
-          navigate("/login");
-          return;
-        }
-        setError(err.response?.data?.message || "Erro ao cadastrar forma de pagamento.");
-      } else if (err instanceof Error) {
-        setError(err.message);
-      } else {
-        setError("Ocorreu um erro. Tente novamente.");
-      }
-      console.error("Erro no cadastro de forma de pagamento:", err);
+      const { data } = await api.get("/pagamentos/formas");
+      setRows(data?.data ?? data ?? []);
+    } catch (e: any) {
+      setError(e?.response?.data?.message || "Falha ao carregar formas de pagamento.");
+      console.error(e);
     } finally {
-      setIsSubmitting(false);
+      setLoading(false);
     }
-  };
+  }
+
+  useEffect(() => {
+    load();
+  }, []);
+
+  async function save() {
+    if (!descricao.trim()) return;
+    setSaving(true);
+    setError(null);
+    try {
+      await api.post("/pagamentos/formas", { descricao: descricao.trim(), ativo: true });
+      setDescricao("");
+      await load();
+      alert("Forma cadastrada com sucesso!");
+    } catch (e: any) {
+      setError(e?.response?.data?.message || "Não foi possível cadastrar a forma.");
+      console.error(e);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function toggleAtivo(f: Forma) {
+    // otimismo: atualiza local antes, reverte se falhar
+    const prev = [...rows];
+    setRows((list) => list.map((x) => (x.id === f.id ? { ...x, ativo: !x.ativo } : x)));
+    try {
+      // ajuste aqui caso tua rota seja PATCH/PUT diferente:
+      await api.put(`/pagamentos/formas/${f.id}`, { ...f, ativo: !f.ativo });
+    } catch (e: any) {
+      console.error(e);
+      setRows(prev);
+      alert("Não foi possível atualizar o status. Tente novamente.");
+    }
+  }
+
+  function onKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
+    if (e.key === "Enter" && descricao.trim() && !saving) {
+      save();
+    }
+  }
 
   return (
-    <div className="bg-white shadow rounded-lg p-4">
-      <h2 className="text-xl font-semibold mb-4">Nova Forma de Pagamento</h2>
-
-      {error && (
-        <p className="mb-3 text-sm text-red-600 bg-red-50 border border-red-200 rounded p-2">
-          {error}
-        </p>
-      )}
-      {success && (
-        <p className="mb-3 text-sm text-green-700 bg-green-50 border border-green-200 rounded p-2">
-          {success}
-        </p>
-      )}
-
-      <form onSubmit={handleSubmit} className="space-y-4">
-        <div>
-          <label
-            htmlFor="nome"
-            className="block text-gray-700 text-sm font-medium mb-1"
-          >
-            Nome *
-          </label>
-          <input
-            type="text"
-            id="nome"
-            name="nome"
-            autoComplete="off"
-            required
-            className="block w-full rounded border border-gray-300 px-3 py-2 text-gray-800 focus:outline-none focus:ring-2 focus:ring-blue-600 focus:border-blue-600"
-            value={nome}
-            onChange={(e) => setNome(e.target.value)}
-          />
-        </div>
-
+    <div className="space-y-4">
+      <div className="flex items-center justify-between gap-3">
+        <h1 className="text-xl font-semibold">Formas de Pagamento</h1>
         <div className="flex items-center gap-2">
           <input
-            type="checkbox"
-            id="ativo"
-            name="ativo"
-            className="h-4 w-4"
-            checked={ativo}
-            onChange={(e) => setAtivo(e.target.checked)}
+            className="border rounded px-3 py-2"
+            placeholder="Filtrar (id, descrição, ativo)"
+            value={filter}
+            onChange={(e) => setFilter(e.target.value)}
           />
-          <label htmlFor="ativo" className="text-gray-700 text-sm">
-            Ativo
-          </label>
         </div>
+      </div>
 
-        <button
-          type="submit"
-          disabled={isSubmitting}
-          className="inline-flex items-center justify-center rounded bg-blue-600 px-4 py-2 text-white font-medium hover:bg-blue-700 disabled:opacity-60"
-        >
-          {isSubmitting ? "Salvando..." : "Salvar"}
-        </button>
-      </form>
+      <div className="rounded-lg border bg-white p-4 shadow-sm space-y-3">
+        {error && (
+          <div className="rounded border border-red-200 bg-red-50 p-2 text-sm text-red-700">
+            {error}
+          </div>
+        )}
+
+        <div className="flex flex-wrap gap-2">
+          <input
+            className="border rounded px-3 py-2 flex-1 min-w-[220px]"
+            placeholder="Descrição (ex.: Cheque, Boleto 30/60/90...)"
+            value={descricao}
+            onChange={(e) => setDescricao(e.target.value)}
+            onKeyDown={onKeyDown}
+            disabled={saving}
+          />
+          <button
+            onClick={save}
+            className="px-3 py-2 rounded bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
+            disabled={!descricao.trim() || saving}
+          >
+            {saving ? "Salvando..." : "Adicionar"}
+          </button>
+        </div>
+      </div>
+
+      <div className="rounded-lg border bg-white overflow-hidden shadow-sm">
+        <table className="w-full text-sm">
+          <thead className="bg-gray-50">
+            <tr>
+              <th className="p-2 border">#</th>
+              <th className="p-2 border text-left">Descrição</th>
+              <th className="p-2 border">Ativo</th>
+              <th className="p-2 border">Ações</th>
+            </tr>
+          </thead>
+          <tbody>
+            {loading && (
+              <tr>
+                <td colSpan={4} className="p-4 text-center">
+                  Carregando…
+                </td>
+              </tr>
+            )}
+
+            {!loading && filtered.map((f) => (
+              <tr key={f.id} className="hover:bg-gray-50">
+                <td className="p-2 border w-16 text-center">{f.id}</td>
+                <td className="p-2 border">{f.descricao}</td>
+                <td className="p-2 border w-24 text-center">
+                  <span
+                    className={[
+                      "inline-flex items-center justify-center rounded-full px-2 py-0.5 text-xs font-medium",
+                      f.ativo ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-600",
+                    ].join(" ")}
+                  >
+                    {f.ativo ? "Sim" : "Não"}
+                  </span>
+                </td>
+                <td className="p-2 border w-40">
+                  <div className="flex justify-center">
+                    <button
+                      onClick={() => toggleAtivo(f)}
+                      className={[
+                        "px-3 py-1 rounded border",
+                        f.ativo
+                          ? "bg-white hover:bg-slate-50"
+                          : "bg-emerald-600 text-white hover:bg-emerald-700",
+                      ].join(" ")}
+                      title={f.ativo ? "Desativar" : "Ativar"}
+                    >
+                      {f.ativo ? "Desativar" : "Ativar"}
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            ))}
+
+            {!loading && filtered.length === 0 && (
+              <tr>
+                <td colSpan={4} className="p-6 text-center text-gray-500">
+                  {rows.length === 0
+                    ? "Sem formas cadastradas"
+                    : "Nenhum resultado para o filtro"}
+                </td>
+              </tr>
+            )}
+          </tbody>
+        </table>
+      </div>
     </div>
   );
-};
-
-export default FormaPagamentoForm;
+}

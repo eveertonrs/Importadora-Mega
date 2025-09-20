@@ -3,12 +3,14 @@ import jwt, { JwtPayload } from "jsonwebtoken";
 
 export type Permissao = "admin" | "financeiro" | "vendedor";
 
+export interface AuthenticatedUser {
+  id: number;
+  nome: string;
+  permissao: Permissao;
+}
+
 export interface AuthenticatedRequest extends Request {
-  user?: {
-    id: number;
-    nome: string;
-    permissao: Permissao;
-  };
+  user?: AuthenticatedUser;
 }
 
 export const protect = (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
@@ -20,21 +22,27 @@ export const protect = (req: AuthenticatedRequest, res: Response, next: NextFunc
   const token = bearer.slice(7);
   try {
     const secret = process.env.JWT_SECRET as string;
+    if (!secret) {
+      return res.status(500).json({ message: "Configuração inválida do servidor (JWT_SECRET)" });
+    }
+
     const decoded = jwt.verify(token, secret) as JwtPayload & {
       id: number;
       nome: string;
       permissao: string;
     };
 
-    // Normaliza a role para minúsculas independentemente do que vier no token
+    const permissao = (decoded.permissao || "vendedor").toLowerCase() as Permissao;
+
     req.user = {
       id: decoded.id,
       nome: decoded.nome,
-      permissao: (decoded.permissao || "vendedor").toLowerCase() as Permissao,
+      permissao,
     };
 
     next();
   } catch (error) {
+    // eslint-disable-next-line no-console
     console.error("Erro de autenticação:", error);
     return res.status(401).json({ message: "Token inválido ou expirado" });
   }

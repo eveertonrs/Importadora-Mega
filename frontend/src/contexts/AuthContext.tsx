@@ -1,12 +1,8 @@
 // src/contexts/AuthContext.tsx
 import React, {
-  createContext,
-  useState,
-  useContext,
-  useEffect,
-  type ReactNode,
+  createContext, useState, useContext, useEffect, useRef, type ReactNode
 } from "react";
-import axios from "axios";
+import api from "../services/api";
 
 type Permissao = "admin" | "financeiro" | "vendedor";
 
@@ -14,20 +10,23 @@ interface User {
   id: number;
   nome: string;
   email: string;
-  permissao: Permissao | string; // mantém compatibilidade com respostas anteriores
+  permissao: Permissao | string;
 }
 
 interface AuthContextType {
   isAuthenticated: boolean;
   user: User | null;
+  loadingAuth: boolean;
+  login: (token: string, user: User) => void;
   logout: () => void;
-  setIsAuthenticated: React.Dispatch<React.SetStateAction<boolean>>;
   setUser: React.Dispatch<React.SetStateAction<User | null>>;
+  setIsAuthenticated: React.Dispatch<React.SetStateAction<boolean>>;
 }
 
 export const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
-const API_URL = import.meta.env.VITE_API_URL ?? "http://localhost:3333";
+// Guard para evitar bootstrap duplicado no StrictMode (apenas DEV)
+let didBootstrap = false;
 
 function isTokenExpired(token: string): boolean {
   try {
@@ -45,105 +44,87 @@ function isTokenExpired(token: string): boolean {
 
 export const AuthProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<User | null>(null);
-  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
+  const [loadingAuth, setLoadingAuth] = useState(true);
 
-  // tenta refresh se houver token expirado no boot
+  // executa 1x mesmo com StrictMode no DEV
   useEffect(() => {
     const bootstrap = async () => {
-      const token = localStorage.getItem("token");
-      const userData = localStorage.getItem("user");
+      if (import.meta.env.DEV && didBootstrap) {
+        // evita repetir no StrictMode (monta/desmonta)
+        setLoadingAuth(false);
+        return;
+      }
+      didBootstrap = true;
 
-      if (!token || !userData) {
-        logout(true);
+      const token = localStorage.getItem("token");
+      const rawUser = localStorage.getItem("user");
+
+      if (token) api.defaults.headers.common.Authorization = `Bearer ${token}`;
+
+      if (!token || !rawUser) {
+        // sem sessão
+        setUser(null);
+        setIsAuthenticated(false);
+        setLoadingAuth(false);
         return;
       }
 
       try {
-        const parsedUser = JSON.parse(userData) as User;
-        // tenta refresh se expirado
+        const parsed = JSON.parse(rawUser) as User;
+
+        // se estiver expirado, apenas limpa sessão
+        // (você pode implementar /auth/refresh depois)
         if (isTokenExpired(token)) {
-          try {
-            const resp = await axios.post(
-              `${API_URL}/auth/refresh`,
-              {},
-              { headers: { Authorization: `Bearer ${token}` } }
-            );
-            const newToken = resp.data?.token as string | undefined;
-            if (!newToken) throw new Error("Refresh sem token");
-            localStorage.setItem("token", newToken);
-            setUser(parsedUser);
-            setIsAuthenticated(true);
-          } catch {
-            logout(true);
-            return;
-          }
-        } else {
-          setUser(parsedUser);
-          setIsAuthenticated(true);
+          localStorage.removeItem("token");
+          localStorage.removeItem("user");
+          delete api.defaults.headers.common.Authorization;
+          setUser(null);
+          setIsAuthenticated(false);
+          setLoadingAuth(false);
+          return;
         }
-      } catch (err) {
-        console.error("Falha ao ler user do localStorage:", err);
-        logout(true);
+
+        setUser(parsed);
+        setIsAuthenticated(true);
+      } catch {
+        setUser(null);
+        setIsAuthenticated(false);
+      } finally {
+        setLoadingAuth(false);
       }
     };
 
     bootstrap();
-    // opcional: renovar token um pouco antes de expirar (ex.: a cada 5 min checa)
-    const interval = setInterval(async () => {
-      const token = localStorage.getItem("token");
-      if (!token) return;
-      // se faltam menos de 2 minutos para expirar, tenta refresh
-      try {
-        const payloadBase64 = token.split(".")[1];
-        const payloadJson = atob(payloadBase64);
-        const payload = JSON.parse(payloadJson);
-        const exp = payload.exp as number | undefined;
-        if (!exp) return;
-        const now = Math.floor(Date.now() / 1000);
-        const secondsLeft = exp - now;
-        if (secondsLeft <= 120) {
-          const resp = await axios.post(
-            `${API_URL}/auth/refresh`,
-            {},
-            { headers: { Authorization: `Bearer ${token}` } }
-          );
-          const newToken = resp.data?.token as string | undefined;
-          if (newToken) localStorage.setItem("token", newToken);
-        }
-      } catch {
-        // se der erro silencioso aqui, não desloga; o fluxo normal lida no próximo request
-      }
-    }, 5 * 60 * 1000);
-
-    return () => clearInterval(interval);
   }, []);
 
-  const logout = (silent = false) => {
+  const login = (token: string, u: User) => {
+    localStorage.setItem("token", token);
+    localStorage.setItem("user", JSON.stringify(u));
+    api.defaults.headers.common.Authorization = `Bearer ${token}`;
+    setUser(u);
+    setIsAuthenticated(true);
+  };
+
+  const logout = () => {
     localStorage.removeItem("token");
     localStorage.removeItem("user");
+    delete api.defaults.headers.common.Authorization;
     setUser(null);
     setIsAuthenticated(false);
-    if (!silent) {
-      // opcional: feedback ou redirect pode ser feito fora deste contexto
-      console.info("Sessão finalizada.");
-    }
   };
 
-  const value = {
-    isAuthenticated,
-    user,
-    logout,
-    setIsAuthenticated,
-    setUser,
-  };
-
-  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+  return (
+    <AuthContext.Provider
+      value={{ isAuthenticated, user, loadingAuth, login, logout, setUser, setIsAuthenticated }}
+    >
+      {children}
+    </AuthContext.Provider>
+  );
 };
 
 export const useAuth = () => {
-  const context = useContext(AuthContext);
-  if (context === undefined) {
-    throw new Error("useAuth must be used within an AuthProvider");
-  }
-  return context;
+  const ctx = useContext(AuthContext);
+  if (!ctx) throw new Error("useAuth must be used within an AuthProvider");
+  return ctx;
 };
