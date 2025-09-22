@@ -3,17 +3,19 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import api from "../services/api";
 
 type Cliente = { id: number; nome_fantasia: string };
-type Forma = { id: number; descricao: string; ativo: boolean };
+// aceita tanto o formato com "nome" quanto "descricao" e (opcional) "ativo"
+type Forma = { id: number; nome?: string; descricao?: string; ativo?: boolean };
 
 export default function PagamentoForm() {
   // ====== estado principal ======
   const [clienteInput, setClienteInput] = useState("");
   const [clienteId, setClienteId] = useState<number | "">("");
-  const [valor, setValor] = useState<string>(""); // usa string para não quebrar digitação
+  const [valor, setValor] = useState<string>(""); // string para facilitar digitação
   const [forma, setForma] = useState<string>("PIX");
   const [obs, setObs] = useState("");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [ok, setOk] = useState(false);
 
   // ====== auto-complete de cliente ======
   const [cliOpen, setCliOpen] = useState(false);
@@ -22,9 +24,9 @@ export default function PagamentoForm() {
   const debouncedSearch = useDebounce(clienteInput, 250);
 
   useEffect(() => {
-    const onClickOutside = (e: MouseEvent) => {
+    function onClickOutside(e: MouseEvent) {
       if (!cliBoxRef.current?.contains(e.target as Node)) setCliOpen(false);
-    };
+    }
     document.addEventListener("mousedown", onClickOutside);
     return () => document.removeEventListener("mousedown", onClickOutside);
   }, []);
@@ -37,7 +39,9 @@ export default function PagamentoForm() {
     let cancel = false;
     (async () => {
       try {
-        const { data } = await api.get("/clientes", { params: { search: debouncedSearch } });
+        const { data } = await api.get("/clientes", {
+          params: { search: debouncedSearch, limit: 10 },
+        });
         if (cancel) return;
         const list: Cliente[] = (data?.data ?? data ?? []).slice(0, 10);
         setCliOpts(list);
@@ -63,29 +67,38 @@ export default function PagamentoForm() {
     setCliOpen(false);
   }
 
-  // ====== formas de pagamento (carrega do backend se existir) ======
-  const [formas, setFormas] = useState<string[]>(["PIX", "BOLETO", "DINHEIRO"]);
+  // ====== formas (carrega do backend; cai no default se falhar) ======
+  const [formas, setFormas] = useState<string[]>([]);
   useEffect(() => {
     (async () => {
       try {
         const { data } = await api.get("/pagamentos/formas");
-        // aceita tanto [{descricao}] quanto array simples
-        const list = (data?.data ?? data ?? []) as any[];
-        const valores = list.map((f: any) => (typeof f === "string" ? f : f.descricao)).filter(Boolean);
+        const list = (data?.data ?? data ?? []) as Forma[];
+
+        const valores = list
+          .filter((f) => (f.ativo === undefined ? true : !!f.ativo))
+          .map((f) => (f.nome ?? f.descricao ?? "").trim())
+          .filter(Boolean);
+
         if (valores.length) {
           setFormas(valores);
-          if (!valores.includes(forma)) setForma(valores[0]);
+          setForma((prev) => (valores.includes(prev) ? prev : valores[0]));
+          return;
         }
       } catch {
-        // segue com defaults
+        /* falhou -> fallback abaixo */
       }
+
+      const fallback = ["PIX", "BOLETO", "DINHEIRO"];
+      setFormas(fallback);
+      setForma((prev) => (fallback.includes(prev) ? prev : fallback[0]));
     })();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // ====== submit ======
   const valorNumber = useMemo(() => {
-    const normalized = valor.replace(",", ".").trim();
+    const normalized = valor.replace(/\./g, "").replace(",", ".").trim();
     const n = Number(normalized);
     return Number.isFinite(n) ? n : NaN;
   }, [valor]);
@@ -93,6 +106,7 @@ export default function PagamentoForm() {
   async function save(e: React.FormEvent) {
     e.preventDefault();
     setError(null);
+    setOk(false);
 
     if (clienteId === "") {
       setError("Selecione um cliente.");
@@ -111,11 +125,10 @@ export default function PagamentoForm() {
         forma_pagamento: forma,
         observacao: obs || null,
       });
-      // reset
       clearCliente();
       setValor("");
       setObs("");
-      alert("Pagamento lançado!");
+      setOk(true);
     } catch (e: any) {
       setError(e?.response?.data?.message || "Falha ao lançar pagamento.");
     } finally {
@@ -123,119 +136,168 @@ export default function PagamentoForm() {
     }
   }
 
+  // melhora um pouco a experiência ao sair do campo
+  function onValorBlur() {
+    const n = valorNumber;
+    if (!Number.isNaN(n) && n >= 0) {
+      setValor(
+        n.toLocaleString("pt-BR", {
+          minimumFractionDigits: 2,
+          maximumFractionDigits: 2,
+        })
+      );
+    }
+  }
+
   return (
-    <form onSubmit={save} className="space-y-4 max-w-2xl">
-      <h1 className="text-xl font-semibold">Lançar pagamento</h1>
+    <div className="mx-auto max-w-3xl">
+      {/* Cabeçalho */}
+      <div className="mb-4">
+        <h1 className="text-xl font-semibold">Lançar pagamento</h1>
+        <p className="text-sm text-slate-500">
+          Selecione o cliente, informe o valor e a forma de pagamento.
+        </p>
+      </div>
 
-      {error && (
-        <div className="rounded border border-red-200 bg-red-50 p-2 text-sm text-red-700">
-          {error}
-        </div>
-      )}
-
-      <div className="grid md:grid-cols-2 gap-4">
-        {/* Cliente (auto-complete) */}
-        <div className="md:col-span-2" ref={cliBoxRef}>
-          <label className="text-sm block mb-1">Cliente</label>
-          <div className="relative">
-            <input
-              className="border rounded px-3 py-2 w-full pr-20"
-              placeholder="Digite para buscar pelo nome…"
-              value={clienteInput}
-              onChange={(e) => {
-                setClienteInput(e.target.value);
-                if (clienteId !== "") setClienteId("");
-              }}
-              onFocus={() => {
-                if (cliOpts.length > 0) setCliOpen(true);
-              }}
-              required
-            />
-            {(clienteId !== "" || clienteInput) && (
-              <button
-                type="button"
-                className="absolute right-2 top-1/2 -translate-y-1/2 text-xs px-2 py-1 rounded bg-slate-100 hover:bg-slate-200"
-                onClick={clearCliente}
-                title="Limpar"
-              >
-                Limpar
-              </button>
+      {/* Card */}
+      <form onSubmit={save} className="rounded-2xl border bg-white shadow-sm">
+        {/* Mensagens */}
+        {(error || ok) && (
+          <div className="p-4 border-b">
+            {error && (
+              <div className="text-sm text-red-700 bg-red-50 border border-red-200 rounded p-3">
+                {error}
+              </div>
             )}
-            {cliOpen && cliOpts.length > 0 && (
-              <div className="absolute z-10 mt-1 w-full rounded border bg-white shadow">
-                {cliOpts.map((c) => (
-                  <button
-                    key={c.id}
-                    type="button"
-                    className="block w-full text-left px-3 py-2 hover:bg-slate-50"
-                    onClick={() => selectCliente(c)}
-                  >
-                    <div className="font-medium">{c.nome_fantasia}</div>
-                    <div className="text-xs text-slate-500">#{c.id}</div>
-                  </button>
-                ))}
+            {ok && (
+              <div className="text-sm text-emerald-700 bg-emerald-50 border border-emerald-200 rounded p-3">
+                Pagamento lançado com sucesso!
               </div>
             )}
           </div>
-          {clienteId !== "" && (
-            <div className="mt-1 text-xs text-slate-600">
-              Selecionado: <b>#{clienteId}</b>
+        )}
+
+        {/* Conteúdo */}
+        <div className="grid grid-cols-1 gap-6 p-5 lg:grid-cols-12">
+          {/* Cliente */}
+          <section className="lg:col-span-12 space-y-2" ref={cliBoxRef}>
+            <label className="text-sm text-slate-700">Cliente</label>
+            <div className="relative">
+              <input
+                className="mt-1 border rounded px-3 py-2 w-full pr-24 focus:outline-none focus:ring-2 focus:ring-blue-200"
+                placeholder="Digite para buscar pelo nome…"
+                value={clienteInput}
+                onChange={(e) => {
+                  setClienteInput(e.target.value);
+                  if (clienteId !== "") setClienteId("");
+                }}
+                onFocus={() => {
+                  if (cliOpts.length > 0) setCliOpen(true);
+                }}
+                required
+              />
+              {(clienteId !== "" || clienteInput) && (
+                <button
+                  type="button"
+                  className="absolute right-2 top-1/2 -translate-y-1/2 text-xs px-2 py-1 rounded border bg-white hover:bg-slate-50"
+                  onClick={clearCliente}
+                  title="Limpar"
+                >
+                  Limpar
+                </button>
+              )}
+              {cliOpen && cliOpts.length > 0 && (
+                <div className="absolute z-10 mt-1 w-full rounded-md border bg-white shadow-lg max-h-64 overflow-auto">
+                  {cliOpts.map((c) => (
+                    <button
+                      key={c.id}
+                      type="button"
+                      className="block w-full text-left px-3 py-2 hover:bg-slate-50"
+                      onClick={() => selectCliente(c)}
+                    >
+                      <div className="font-medium">{c.nome_fantasia}</div>
+                      <div className="text-xs text-slate-500">#{c.id}</div>
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
-          )}
+            {clienteId !== "" && (
+              <div className="text-xs text-slate-600">
+                Selecionado: <b>#{clienteId}</b>
+              </div>
+            )}
+          </section>
+
+          {/* Valor / Forma */}
+          <section className="lg:col-span-6 space-y-2">
+            <label className="text-sm text-slate-700">Valor</label>
+            <input
+              className="mt-1 border rounded px-3 py-2 w-full focus:outline-none focus:ring-2 focus:ring-blue-200"
+              inputMode="decimal"
+              placeholder="0,00"
+              value={valor}
+              onChange={(e) => setValor(e.target.value)}
+              onBlur={onValorBlur}
+              required
+            />
+            <p className="text-xs text-slate-500">
+              Use vírgula ou ponto para decimais.
+            </p>
+          </section>
+
+          <section className="lg:col-span-6 space-y-2">
+            <label className="text-sm text-slate-700">Forma</label>
+            <select
+              className="mt-1 border rounded px-3 py-2 w-full focus:outline-none focus:ring-2 focus:ring-blue-200"
+              value={forma}
+              onChange={(e) => setForma(e.target.value)}
+            >
+              {formas.map((f) => (
+                <option key={f} value={f}>
+                  {f}
+                </option>
+              ))}
+            </select>
+          </section>
+
+          {/* Observação */}
+          <section className="lg:col-span-12 space-y-2">
+            <label className="text-sm text-slate-700">Observação</label>
+            <input
+              className="mt-1 border rounded px-3 py-2 w-full focus:outline-none focus:ring-2 focus:ring-blue-200"
+              value={obs}
+              onChange={(e) => setObs(e.target.value)}
+              placeholder="opcional"
+            />
+          </section>
         </div>
 
-        {/* Valor */}
-        <div>
-          <label className="text-sm block mb-1">Valor</label>
-          <input
-            className="border rounded px-3 py-2 w-full"
-            inputMode="decimal"
-            placeholder="0,00"
-            value={valor}
-            onChange={(e) => setValor(e.target.value)}
-            required
-          />
-          <div className="text-xs text-slate-500 mt-1">
-            Use vírgula ou ponto para decimais.
-          </div>
-        </div>
-
-        {/* Forma */}
-        <div>
-          <label className="text-sm block mb-1">Forma</label>
-          <select
-            className="border rounded px-3 py-2 w-full"
-            value={forma}
-            onChange={(e) => setForma(e.target.value)}
+        {/* Ações */}
+        <div className="flex items-center gap-2 border-t p-4">
+          <button
+            type="submit"
+            disabled={saving}
+            className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50"
           >
-            {formas.map((f) => (
-              <option key={f} value={f}>
-                {f}
-              </option>
-            ))}
-          </select>
+            {saving ? "Salvando…" : "Salvar"}
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              clearCliente();
+              setValor("");
+              setObs("");
+              setError(null);
+              setOk(false);
+            }}
+            className="px-4 py-2 bg-slate-100 rounded-md hover:bg-slate-200"
+          >
+            Limpar
+          </button>
         </div>
-
-        {/* Observação */}
-        <div className="md:col-span-2">
-          <label className="text-sm block mb-1">Observação</label>
-          <input
-            className="border rounded px-3 py-2 w-full"
-            value={obs}
-            onChange={(e) => setObs(e.target.value)}
-            placeholder="opcional"
-          />
-        </div>
-      </div>
-
-      <button
-        type="submit"
-        disabled={saving}
-        className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
-      >
-        {saving ? "Salvando…" : "Salvar"}
-      </button>
-    </form>
+      </form>
+    </div>
   );
 }
 

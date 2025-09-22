@@ -9,39 +9,48 @@ const toDbNull = (v?: string | null) =>
     : v;
 
 /** --------------------- LISTAGEM / BUSCA --------------------- */
+// controllers/clientes.controller.ts  (getClientes)
 export const getClientes = async (req: Request, res: Response) => {
-  const { page = 1, limit = 10, search = "" } = req.query;
+  const { page = 1, limit = 10, search = "", status = "" } = req.query;
 
-  const pageNumber = Number(page);
-  const limitNumber = Number(limit);
+  const pageNumber = Math.max(1, Number(page));
+  const limitNumber = Math.min(200, Number(limit));
   const offset = (pageNumber - 1) * limitNumber;
 
   try {
-    let query = `
-      SELECT id, nome_fantasia, grupo_empresa, tabela_preco, status, whatsapp, anotacoes, links_json
-      FROM clientes
-    `;
-    let countQuery = "SELECT COUNT(*) as total FROM clientes";
-
+    const where: string[] = [];
     const request = pool.request();
     const countRequest = pool.request();
 
     if (typeof search === "string" && search.trim() !== "") {
-      // 🔎 inclui whatsapp na busca
-      query += " WHERE (nome_fantasia LIKE @search OR grupo_empresa LIKE @search OR whatsapp LIKE @search)";
-      countQuery += " WHERE (nome_fantasia LIKE @search OR grupo_empresa LIKE @search OR whatsapp LIKE @search)";
+      where.push("(nome_fantasia LIKE @search OR grupo_empresa LIKE @search OR whatsapp LIKE @search)");
       request.input("search", `%${search}%`);
       countRequest.input("search", `%${search}%`);
     }
+    if (typeof status === "string" && (status === "ATIVO" || status === "INATIVO")) {
+      where.push("status = @status");
+      request.input("status", status);
+      countRequest.input("status", status);
+    }
 
-    query += " ORDER BY nome_fantasia OFFSET @offset ROWS FETCH NEXT @limit ROWS ONLY";
+    const whereSql = where.length ? ` WHERE ${where.join(" AND ")}` : "";
+
+    const query = `
+      SELECT id, nome_fantasia, grupo_empresa, tabela_preco, status, whatsapp, anotacoes, links_json
+      FROM clientes
+      ${whereSql}
+      ORDER BY nome_fantasia
+      OFFSET @offset ROWS FETCH NEXT @limit ROWS ONLY
+    `;
+    const countQuery = `SELECT COUNT(*) as total FROM clientes ${whereSql}`;
+
     request.input("offset", offset).input("limit", limitNumber);
 
     const [list, total] = await Promise.all([request.query(query), countRequest.query(countQuery)]);
 
     res.json({
       data: list.recordset,
-      total: total.recordset[0].total,
+      total: Number(total.recordset[0]?.total ?? 0),
       page: pageNumber,
       limit: limitNumber,
     });
@@ -50,6 +59,7 @@ export const getClientes = async (req: Request, res: Response) => {
     res.status(500).json({ message: "Erro interno no servidor" });
   }
 };
+
 
 export const getClienteById = async (req: Request, res: Response) => {
   const { id } = req.params;
@@ -94,16 +104,38 @@ const linkSchema = z.object({
 });
 
 /** --------------------- CREATE / UPDATE / DELETE --------------------- */
+// --- dentro de createCliente ---
 export const createCliente = async (req: Request, res: Response) => {
   try {
     const data = clienteSchema.parse(req.body);
     const statusDb = (data.status || "ATIVO").toUpperCase() === "INATIVO" ? "INATIVO" : "ATIVO";
 
+    // 💡 por padrão, bloqueia nomes iguais. Se quiser permitir, chame com ?allowDuplicate=1
+    const allowDuplicate = String(req.query.allowDuplicate ?? "").trim() === "1";
+
+    if (!allowDuplicate) {
+      const exists = await pool
+        .request()
+        .input("nome", data.nome_fantasia.trim())
+        .query(`
+          SELECT TOP 1 id, status
+          FROM clientes
+          WHERE nome_fantasia = @nome
+        `);
+      if (exists.recordset.length) {
+        return res.status(409).json({
+          message: "Já existe um cliente com este nome.",
+          existing_id: exists.recordset[0].id,
+          existing_status: exists.recordset[0].status,
+        });
+      }
+    }
+
     const result = await pool
       .request()
       .input("nome_fantasia", data.nome_fantasia)
       .input("grupo_empresa", toDbNull(data.grupo_empresa ?? null))
-      .input("tabela_preco", data.tabela_preco) // obrigatório
+      .input("tabela_preco", data.tabela_preco)
       .input("status", statusDb)
       .input("whatsapp", toDbNull(data.whatsapp ?? null))
       .input("anotacoes", toDbNull(data.anotacoes ?? null))
@@ -127,12 +159,28 @@ export const createCliente = async (req: Request, res: Response) => {
   }
 };
 
+
+// --- dentro de updateCliente (opcional: impedir renomear para nome já usado por outro id) ---
 export const updateCliente = async (req: Request, res: Response) => {
   const { id } = req.params;
   try {
     const data = clienteSchema.partial().parse(req.body);
 
-    // Normalizações ("" -> null) e status em UPPER
+    // se for renomear, checa duplicidade
+    if (data.nome_fantasia && data.nome_fantasia.trim()) {
+      const exists = await pool
+        .request()
+        .input("id", +id)
+        .input("nome", data.nome_fantasia.trim())
+        .query(`
+          SELECT TOP 1 id FROM clientes
+          WHERE nome_fantasia = @nome AND id <> @id
+        `);
+      if (exists.recordset.length) {
+        return res.status(409).json({ message: "Já existe outro cliente com este nome." });
+      }
+    }
+
     const sanitized: Record<string, any> = {};
     for (const [key, value] of Object.entries(data)) {
       if (key === "status" && typeof value === "string") {
@@ -144,18 +192,11 @@ export const updateCliente = async (req: Request, res: Response) => {
       }
     }
 
-    const fields = Object.keys(sanitized)
-      .map((key) => `${key} = @${key}`)
-      .join(", ");
-
-    if (!fields) {
-      return res.status(400).json({ message: "Nenhum campo para atualizar" });
-    }
+    const fields = Object.keys(sanitized).map((k) => `${k} = @${k}`).join(", ");
+    if (!fields) return res.status(400).json({ message: "Nenhum campo para atualizar" });
 
     const request = pool.request().input("id", +id);
-    Object.entries(sanitized).forEach(([key, value]) => {
-      request.input(key, value ?? null);
-    });
+    Object.entries(sanitized).forEach(([k, v]) => request.input(k, v ?? null));
 
     const result = await request.query(`
       UPDATE clientes SET ${fields}, atualizado_em = SYSUTCDATETIME()
@@ -163,10 +204,7 @@ export const updateCliente = async (req: Request, res: Response) => {
       WHERE id = @id
     `);
 
-    if (result.recordset.length === 0) {
-      return res.status(404).json({ message: "Cliente não encontrado" });
-    }
-
+    if (result.recordset.length === 0) return res.status(404).json({ message: "Cliente não encontrado" });
     res.json({ message: "Cliente atualizado com sucesso!", data: result.recordset[0] });
   } catch (error) {
     if (error instanceof z.ZodError) {
@@ -179,6 +217,7 @@ export const updateCliente = async (req: Request, res: Response) => {
     res.status(500).json({ message: "Erro interno no servidor" });
   }
 };
+
 
 export const deleteCliente = async (req: Request, res: Response) => {
   const { id } = req.params;

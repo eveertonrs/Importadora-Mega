@@ -9,11 +9,11 @@ const toDbNull = (v?: string | null) =>
 /* ---------- schemas ---------- */
 const transportadoraSchema = z.object({
   razao_social: z.string().min(1, "Razão Social é obrigatória"),
-  cnpj: z.string().optional(),
-  forma_envio: z.string().optional(),
-  telefone: z.string().optional(),
-  endereco: z.string().optional(),
-  referencia: z.string().optional(),
+  cnpj: z.string().nullish(),
+  forma_envio: z.string().nullish(),
+  telefone: z.string().nullish(),
+  endereco: z.string().nullish(),
+  referencia: z.string().nullish(),
   ativo: z.boolean().default(true),
 });
 
@@ -45,10 +45,7 @@ export const getTransportadoras = async (req: Request, res: Response) => {
     `;
 
     reqList.input("offset", offset).input("limit", limit);
-    const [countRs, listRs] = await Promise.all([
-      reqCount.query(countSql),
-      reqList.query(listSql),
-    ]);
+    const [countRs, listRs] = await Promise.all([reqCount.query(countSql), reqList.query(listSql)]);
 
     res.json({
       data: listRs.recordset,
@@ -65,8 +62,7 @@ export const getTransportadoras = async (req: Request, res: Response) => {
 export const getTransportadoraById = async (req: Request, res: Response) => {
   const { id } = req.params;
   try {
-    const rs = await pool.request().input("id", +id)
-      .query("SELECT * FROM transportadoras WHERE id = @id");
+    const rs = await pool.request().input("id", +id).query("SELECT * FROM transportadoras WHERE id = @id");
     if (!rs.recordset.length) return res.status(404).json({ message: "Transportadora não encontrada" });
     res.json(rs.recordset[0]);
   } catch (error) {
@@ -90,10 +86,10 @@ export const createTransportadora = async (req: Request, res: Response) => {
       .input("ativo", d.ativo ?? true)
       .query(`
         INSERT INTO transportadoras
-          (razao_social, cnpj, forma_envio, telefone, endereco, referencia, ativo, criado_em)
+          (razao_social, cnpj, forma_envio, telefone, endereco, referencia, ativo)
         OUTPUT INSERTED.*
         VALUES
-          (@razao_social, @cnpj, @forma_envio, @telefone, @endereco, @referencia, @ativo, SYSUTCDATETIME())
+          (@razao_social, @cnpj, @forma_envio, @telefone, @endereco, @referencia, @ativo)
       `);
 
     res.status(201).json(rs.recordset[0]);
@@ -105,7 +101,12 @@ export const createTransportadora = async (req: Request, res: Response) => {
       return res.status(409).json({ message: "CNPJ já cadastrado." });
     }
     console.error("Erro ao criar transportadora:", error);
-    res.status(500).json({ message: "Erro interno no servidor" });
+    res.status(500).json({
+      message: "Erro interno no servidor",
+      // dica de debug controlada (ajuda em dev):
+      detail: error?.message ?? undefined,
+      code: error?.number ?? undefined,
+    });
   }
 };
 
@@ -117,12 +118,12 @@ export const updateTransportadora = async (req: Request, res: Response) => {
     const sanitized: Record<string, any> = {};
     for (const [k, v] of Object.entries(d)) {
       sanitized[k] =
-        ["cnpj", "forma_envio", "telefone", "endereco", "referencia"].includes(k)
-          ? toDbNull(v as any)
-          : v;
+        ["cnpj", "forma_envio", "telefone", "endereco", "referencia"].includes(k) ? toDbNull(v as any) : v;
     }
 
-    const fields = Object.keys(sanitized).map((k) => `${k}=@${k}`).join(", ");
+    const fields = Object.keys(sanitized)
+      .map((k) => `${k}=@${k}`)
+      .join(", ");
     if (!fields) return res.status(400).json({ message: "Nenhum campo para atualizar" });
 
     const reqDb = pool.request().input("id", +id);
@@ -130,7 +131,7 @@ export const updateTransportadora = async (req: Request, res: Response) => {
 
     const rs = await reqDb.query(`
       UPDATE transportadoras
-         SET ${fields}, atualizado_em = SYSUTCDATETIME()
+         SET ${fields}
        OUTPUT INSERTED.*
        WHERE id = @id
     `);
@@ -145,15 +146,18 @@ export const updateTransportadora = async (req: Request, res: Response) => {
       return res.status(409).json({ message: "CNPJ já cadastrado." });
     }
     console.error("Erro ao atualizar transportadora:", error);
-    res.status(500).json({ message: "Erro interno no servidor" });
+    res.status(500).json({
+      message: "Erro interno no servidor",
+      detail: error?.message ?? undefined,
+      code: error?.number ?? undefined,
+    });
   }
 };
 
 export const deleteTransportadora = async (req: Request, res: Response) => {
   const { id } = req.params;
   try {
-    const rs = await pool.request().input("id", +id)
-      .query("DELETE FROM transportadoras WHERE id = @id");
+    const rs = await pool.request().input("id", +id).query("DELETE FROM transportadoras WHERE id = @id");
     if ((rs.rowsAffected?.[0] ?? 0) === 0) {
       return res.status(404).json({ message: "Transportadora não encontrada" });
     }

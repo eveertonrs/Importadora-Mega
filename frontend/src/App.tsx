@@ -1,14 +1,6 @@
-// src/App.tsx
 import "./index.css";
 import type { ReactNode } from "react";
-import {
-  Routes,
-  Route,
-  NavLink,
-  Navigate,
-  useParams,
-  Outlet,
-} from "react-router-dom";
+import { Routes, Route, NavLink, Navigate, Outlet } from "react-router-dom";
 
 import ErrorBoundary from "./components/ErrorBoundary";
 
@@ -21,7 +13,7 @@ import Home from "./components/Home";
 
 // clientes
 import Clientes from "./components/Clientes";
-import ClienteForm from "./components/ClienteForm";            // ✅ NOVO
+import ClienteForm from "./components/ClienteForm";
 import ClienteDetalhes from "./components/ClienteDetalhes";
 import ClienteDocumentoForm from "./components/ClienteDocumentoForm";
 
@@ -34,6 +26,7 @@ import FormaPagamentoForm from "./components/FormaPagamentoForm";
 import TransportadoraForm from "./components/TransportadoraForm";
 import Dominios from "./components/Dominios";
 import DominioItens from "./components/DominioItens";
+import DominioForm from "./components/DominioForm"; // ✅ usar p/ novo e editar
 
 // blocos
 import Blocos from "./components/ui/Blocos";
@@ -45,7 +38,10 @@ import Button from "./components/ui/button";
 // auth
 import { useAuth } from "./contexts/AuthContext";
 
-// ---- Layout com header/nav e botão sair ----
+// toast bridge
+import { NotifyBridge } from "./lib/notify-bridge";
+
+/* ---------------- Layout ---------------- */
 const Layout: React.FC<{ children: ReactNode }> = ({ children }) => {
   const { user, logout } = useAuth();
   return (
@@ -95,16 +91,6 @@ const Layout: React.FC<{ children: ReactNode }> = ({ children }) => {
   );
 };
 
-// ---- Wrapper para usar useParams dentro do Router ----
-const ClienteDocumentoPage: React.FC = () => {
-  const { id } = useParams<{ id: string }>();
-  return <ClienteDocumentoForm clienteId={id ?? ""} />;
-};
-
-/**
- * Área protegida: só cria o <Layout> depois que verificamos o auth.
- * Evita qualquer NavLink fora do Router.
- */
 const ProtectedArea: React.FC = () => {
   const { isAuthenticated, loadingAuth } = useAuth();
   if (loadingAuth) return <div className="p-6">Carregando…</div>;
@@ -116,9 +102,11 @@ const ProtectedArea: React.FC = () => {
   );
 };
 
-function App() {
+export default function App() {
   return (
     <ErrorBoundary>
+      <NotifyBridge />
+
       <Routes>
         {/* públicas */}
         <Route path="/login" element={<Login />} />
@@ -127,21 +115,29 @@ function App() {
         {/* protegidas */}
         <Route element={<ProtectedArea />}>
           <Route path="/" element={<Home />} />
+
           {/* Blocos */}
           <Route path="/blocos" element={<Blocos />} />
           <Route path="/blocos/:id" element={<BlocoDetalhe />} />
+
           {/* Clientes */}
           <Route path="/clientes" element={<Clientes />} />
-          <Route path="/clientes/novo" element={<ClienteForm />} /> {/* ✅ NOVO */}
+          <Route path="/clientes/novo" element={<ClienteForm />} />
+          <Route path="/clientes/:id/editar" element={<ClienteForm />} /> {/* ✅ edição */}
           <Route path="/clientes/:id" element={<ClienteDetalhes />} />
-          <Route path="/clientes/:id/documentos" element={<ClienteDocumentoPage />} />
+          <Route path="/clientes/:id/documentos" element={<ClienteDocumentoForm />} />
+
+          {/* Domínios */}
+          <Route path="/dominios" element={<Dominios />} />
+          <Route path="/dominios/novo" element={<DominioForm />} />           {/* ✅ novo */}
+          <Route path="/dominios/:id/editar" element={<DominioForm />} />     {/* ✅ edição */}
+          <Route path="/dominios/:id/itens" element={<DominioItens />} />
+
           {/* Financeiro/auxiliares */}
           <Route path="/pagamentos" element={<PagamentoForm />} />
           <Route path="/historico-pagamentos" element={<HistoricoPagamentos />} />
           <Route path="/formas-pagamento" element={<FormaPagamentoForm />} />
           <Route path="/transportadoras" element={<TransportadoraForm />} />
-          <Route path="/dominios" element={<Dominios />} />
-          <Route path="/dominios/:id/itens" element={<DominioItens />} />
         </Route>
 
         {/* 404 */}
@@ -150,5 +146,3 @@ function App() {
     </ErrorBoundary>
   );
 }
-
-export default App;

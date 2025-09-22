@@ -1,7 +1,8 @@
 ﻿import "dotenv/config";
 import sql from "mssql";
 
-const cfg: sql.config = {
+
+export const dbConfig: sql.config = {
   server: process.env.MSSQL_SERVER!,
   database: process.env.MSSQL_DB!,
   user: process.env.MSSQL_USER!,
@@ -12,7 +13,7 @@ const cfg: sql.config = {
   },
 };
 
-export const pool = new sql.ConnectionPool(cfg);
+export const pool = new sql.ConnectionPool(dbConfig);
 
 export const connectDB = async () => {
   try {
