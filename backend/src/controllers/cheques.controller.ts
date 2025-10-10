@@ -1,14 +1,18 @@
 import { Request, Response } from "express";
 import { z } from "zod";
 import { pool } from "../db";
+import sql from "mssql";
 
+const dateOnly = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Use YYYY-MM-DD");
+
+// filtros de listagem (mantendo status e cliente_id; datas viram DATE)
 const listQuerySchema = z.object({
   page: z.coerce.number().int().positive().default(1),
   limit: z.coerce.number().int().positive().max(200).default(50),
   status: z.enum(["PENDENTE", "LIQUIDADO", "DEVOLVIDO", "CANCELADO"]).optional(),
   cliente_id: z.coerce.number().int().optional(),
-  bom_para_de: z.string().datetime().optional(),
-  bom_para_ate: z.string().datetime().optional(),
+  bom_para_de: dateOnly.optional(),
+  bom_para_ate: dateOnly.optional(),
   q: z.string().trim().optional(), // busca em numero_referencia / observacao
 });
 
@@ -24,28 +28,28 @@ export const getCheques = async (req: Request, res: Response) => {
 
     if (status) {
       where.push("bl.status = @status");
-      reqCount.input("status", status);
-      reqPage.input("status", status);
+      reqCount.input("status", sql.VarChar(15), status);
+      reqPage.input("status", sql.VarChar(15), status);
     }
     if (cliente_id) {
       where.push("b.cliente_id = @cliente_id");
-      reqCount.input("cliente_id", cliente_id);
-      reqPage.input("cliente_id", cliente_id);
+      reqCount.input("cliente_id", sql.Int, cliente_id);
+      reqPage.input("cliente_id", sql.Int, cliente_id);
     }
     if (bom_para_de) {
       where.push("bl.bom_para >= @bom_para_de");
-      reqCount.input("bom_para_de", bom_para_de);
-      reqPage.input("bom_para_de", bom_para_de);
+      reqCount.input("bom_para_de", sql.Date, bom_para_de);
+      reqPage.input("bom_para_de", sql.Date, bom_para_de);
     }
     if (bom_para_ate) {
       where.push("bl.bom_para <= @bom_para_ate");
-      reqCount.input("bom_para_ate", bom_para_ate);
-      reqPage.input("bom_para_ate", bom_para_ate);
+      reqCount.input("bom_para_ate", sql.Date, bom_para_ate);
+      reqPage.input("bom_para_ate", sql.Date, bom_para_ate);
     }
     if (q) {
       where.push("(bl.numero_referencia LIKE '%' + @q + '%' OR bl.observacao LIKE '%' + @q + '%')");
-      reqCount.input("q", q);
-      reqPage.input("q", q);
+      reqCount.input("q", sql.VarChar(60), q);
+      reqPage.input("q", sql.VarChar(60), q);
     }
 
     const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
@@ -74,7 +78,7 @@ export const getCheques = async (req: Request, res: Response) => {
       OFFSET @offset ROWS FETCH NEXT @limit ROWS ONLY
     `;
 
-    reqPage.input("offset", offset).input("limit", limit);
+    reqPage.input("offset", sql.Int, offset).input("limit", sql.Int, limit);
 
     const [countRs, pageRs] = await Promise.all([
       reqCount.query(countSql),
@@ -103,7 +107,7 @@ const idParamSchema = z.object({ id: z.coerce.number().int().positive() });
 async function ensureCheque(id: number) {
   const rs = await pool
     .request()
-    .input("id", id)
+    .input("id", sql.Int, id)
     .query(
       `SELECT id, status, tipo_recebimento
          FROM bloco_lancamentos
@@ -132,7 +136,7 @@ export const liquidarCheque = async (req: Request, res: Response) => {
 
     const rs = await pool
       .request()
-      .input("id", id)
+      .input("id", sql.Int, id)
       .query(`
         UPDATE bloco_lancamentos
            SET status = 'LIQUIDADO'
@@ -168,7 +172,7 @@ export const devolverCheque = async (req: Request, res: Response) => {
 
     const rs = await pool
       .request()
-      .input("id", id)
+      .input("id", sql.Int, id)
       .query(`
         UPDATE bloco_lancamentos
            SET status = 'DEVOLVIDO'

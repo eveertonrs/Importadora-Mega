@@ -136,7 +136,6 @@ export default function PagamentoForm() {
     }
   }
 
-  // melhora um pouco a experiência ao sair do campo
   function onValorBlur() {
     const n = valorNumber;
     if (!Number.isNaN(n) && n >= 0) {
@@ -151,33 +150,23 @@ export default function PagamentoForm() {
 
   return (
     <div className="mx-auto max-w-3xl">
-      {/* Cabeçalho */}
       <div className="mb-4">
         <h1 className="text-xl font-semibold">Lançar pagamento</h1>
-        <p className="text-sm text-slate-500">
-          Selecione o cliente, informe o valor e a forma de pagamento.
-        </p>
+        <p className="text-sm text-slate-500">Selecione o cliente, informe o valor e a forma de pagamento.</p>
       </div>
 
-      {/* Card */}
       <form onSubmit={save} className="rounded-2xl border bg-white shadow-sm">
-        {/* Mensagens */}
         {(error || ok) && (
           <div className="p-4 border-b">
-            {error && (
-              <div className="text-sm text-red-700 bg-red-50 border border-red-200 rounded p-3">
-                {error}
-              </div>
-            )}
+            {error && <div className="text-sm text-red-700 bg-red-50 border border-red-200 rounded p-3">{error}</div>}
             {ok && (
-              <div className="text-sm text-emerald-700 bg-emerald-50 border border-emerald-200 rounded p-3">
+              <div className="text-sm text-emerald-700 bg-emerald-50 border-emerald-200 border rounded p-3">
                 Pagamento lançado com sucesso!
               </div>
             )}
           </div>
         )}
 
-        {/* Conteúdo */}
         <div className="grid grid-cols-1 gap-6 p-5 lg:grid-cols-12">
           {/* Cliente */}
           <section className="lg:col-span-12 space-y-2" ref={cliBoxRef}>
@@ -241,18 +230,12 @@ export default function PagamentoForm() {
               onBlur={onValorBlur}
               required
             />
-            <p className="text-xs text-slate-500">
-              Use vírgula ou ponto para decimais.
-            </p>
+            <p className="text-xs text-slate-500">Use vírgula ou ponto para decimais.</p>
           </section>
 
           <section className="lg:col-span-6 space-y-2">
             <label className="text-sm text-slate-700">Forma</label>
-            <select
-              className="mt-1 border rounded px-3 py-2 w-full focus:outline-none focus:ring-2 focus:ring-blue-200"
-              value={forma}
-              onChange={(e) => setForma(e.target.value)}
-            >
+            <select className="mt-1 border rounded px-3 py-2 w-full focus:outline-none focus:ring-2 focus:ring-blue-200" value={forma} onChange={(e) => setForma(e.target.value)}>
               {formas.map((f) => (
                 <option key={f} value={f}>
                   {f}
@@ -264,22 +247,12 @@ export default function PagamentoForm() {
           {/* Observação */}
           <section className="lg:col-span-12 space-y-2">
             <label className="text-sm text-slate-700">Observação</label>
-            <input
-              className="mt-1 border rounded px-3 py-2 w-full focus:outline-none focus:ring-2 focus:ring-blue-200"
-              value={obs}
-              onChange={(e) => setObs(e.target.value)}
-              placeholder="opcional"
-            />
+            <input className="mt-1 border rounded px-3 py-2 w-full focus:outline-none focus:ring-2 focus:ring-blue-200" value={obs} onChange={(e) => setObs(e.target.value)} placeholder="opcional" />
           </section>
         </div>
 
-        {/* Ações */}
         <div className="flex items-center gap-2 border-t p-4">
-          <button
-            type="submit"
-            disabled={saving}
-            className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50"
-          >
+          <button type="submit" disabled={saving} className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:opacity-50">
             {saving ? "Salvando…" : "Salvar"}
           </button>
           <button

@@ -1,3 +1,4 @@
+// src/App.tsx
 import "./index.css";
 import type { ReactNode } from "react";
 import { Routes, Route, NavLink, Navigate, Outlet } from "react-router-dom";
@@ -20,13 +21,13 @@ import ClienteDocumentoForm from "./components/ClienteDocumentoForm";
 // financeiro
 import PagamentoForm from "./components/PagamentoForm";
 import HistoricoPagamentos from "./components/HistoricoPagamentos";
-import FormaPagamentoForm from "./components/FormaPagamentoForm";
+import FormaPagamentoForm from "./components/PedidoParametrosPage";
 
 // auxiliares
 import TransportadoraForm from "./components/TransportadoraForm";
 import Dominios from "./components/Dominios";
 import DominioItens from "./components/DominioItens";
-import DominioForm from "./components/DominioForm"; // ✅ usar p/ novo e editar
+import DominioForm from "./components/DominioForm";
 
 // blocos
 import Blocos from "./components/ui/Blocos";
@@ -41,37 +42,100 @@ import { useAuth } from "./contexts/AuthContext";
 // toast bridge
 import { NotifyBridge } from "./lib/notify-bridge";
 
+// financeiro (novas telas)
+import FinanceiroReceber from "./components/FinanceiroReceber";
+import Conferencia from "./components/financeiro/Conferencia";
+import { useState } from "react";
+
+// const FEATURES = {
+//   dominios: import.meta.env.VITE_FEATURE_DOMINIOS === "1",
+//   pagamentos: import.meta.env.VITE_FEATURE_PAGAMENTOS === "1",
+// };
+
+
 /* ---------------- Layout ---------------- */
 const Layout: React.FC<{ children: ReactNode }> = ({ children }) => {
   const { user, logout } = useAuth();
+  const [open, setOpen] = useState(false);
+
+  const navItems = [
+    { to: "/", label: "Início" },
+    { to: "/blocos", label: "Blocos" },
+    { to: "/clientes", label: "Clientes" },
+    { to: "/formas-pagamento", label: "Parâmetros do pedido" },
+    { to: "/transportadoras", label: "Transportadoras" },
+    // { to: "/dominios", label: "Domínios" },
+    // { to: "/pagamentos", label: "Pagamentos" },
+    { to: "/historico-pagamentos", label: "Histórico" },
+    { to: "/financeiro/receber", label: "Financeiro" },
+    { to: "/financeiro/conferencia", label: "Conferência" },
+  ];
+
   return (
-    <div className="container mx-auto p-4">
-      <header className="sticky top-0 z-40 mb-6 bg-white/70 backdrop-blur border-b border-slate-200">
-        <div className="container mx-auto px-4 py-3 flex flex-wrap gap-4 justify-between items-center">
-          <h1 className="text-lg md:text-xl font-semibold text-slate-900">
-            Bem-vindo, {user?.nome}
-          </h1>
-          <nav className="text-sm">
-            <ul className="flex flex-wrap gap-4">
-              {[
-                { to: "/", label: "Início" },
-                { to: "/blocos", label: "Blocos" },
-                { to: "/clientes", label: "Clientes" },
-                { to: "/formas-pagamento", label: "Formas de Pagamento" },
-                { to: "/transportadoras", label: "Transportadoras" },
-                { to: "/dominios", label: "Domínios" },
-                { to: "/pagamentos", label: "Pagamentos" },
-                { to: "/historico-pagamentos", label: "Histórico" },
-              ].map((item) => (
-                <li key={item.to}>
+    <div className="min-h-dvh bg-slate-50">
+      {/* Header */}
+      <header className="sticky top-0 z-40 bg-white/70 backdrop-blur supports-[backdrop-filter]:bg-white/50">
+        {/* hairline com “degradê” */}
+        <div className="h-px w-full bg-gradient-to-r from-transparent via-slate-200 to-transparent" />
+        <div className="mx-auto max-w-7xl px-4 sm:px-6">
+          <div className="flex items-center justify-between py-3">
+            {/* Brand + usuário */}
+            <div className="flex items-center gap-3">
+              <div className="h-9 w-9 rounded-xl bg-slate-900 text-white grid place-items-center shadow-sm">
+                <span className="text-[11px] font-bold">MEGA</span>
+              </div>
+              <div className="leading-tight">
+                <div className="text-sm text-slate-500">Bem-vindo</div>
+                <div className="text-base font-semibold text-slate-900">{user?.nome}</div>
+              </div>
+            </div>
+
+            {/* Botão mobile */}
+            <button
+              className="md:hidden inline-flex h-9 w-9 items-center justify-center rounded-lg border border-slate-200 bg-white hover:bg-slate-50 focus:outline-none focus:ring-2 focus:ring-slate-300"
+              onClick={() => setOpen((v) => !v)}
+              aria-label="Abrir menu"
+              aria-expanded={open}
+            >
+              <svg viewBox="0 0 24 24" fill="none" className="h-5 w-5">
+                <path
+                  d="M4 6h16M4 12h16M4 18h16"
+                  stroke="currentColor"
+                  strokeWidth="1.8"
+                  strokeLinecap="round"
+                />
+              </svg>
+            </button>
+
+            {/* Ações à direita */}
+            <div className="hidden md:block">
+              <Button variant="destructive" size="sm" onClick={logout}>Sair</Button>
+            </div>
+          </div>
+        </div>
+
+        {/* Nav */}
+        <nav className="mx-auto max-w-7xl px-4 sm:px-6 pb-3 md:pb-4">
+          <div
+            className={[
+              "md:flex md:flex-wrap md:items-center md:gap-2",
+              open ? "block" : "hidden md:block",
+            ].join(" ")}
+          >
+            {/* scroller horizontal quando necessário */}
+            <ul className="flex gap-2 overflow-x-auto no-scrollbar py-2 md:py-0">
+              {navItems.map((item) => (
+                <li key={item.to} className="shrink-0">
                   <NavLink
                     to={item.to}
+                    onClick={() => setOpen(false)}
                     className={({ isActive }) =>
                       [
-                        "px-2 py-1 rounded-md transition-colors",
+                        "inline-flex items-center rounded-xl px-3 py-1.5 text-sm transition-colors border",
+                        "focus:outline-none focus:ring-2 focus:ring-slate-300",
                         isActive
-                          ? "text-slate-900 bg-slate-100"
-                          : "text-blue-600 hover:text-blue-700 hover:bg-blue-50",
+                          ? "bg-slate-900 text-white border-slate-900 shadow-sm"
+                          : "bg-white text-slate-700 border-slate-200 hover:bg-slate-50 hover:text-slate-900",
                       ].join(" ")
                     }
                   >
@@ -79,14 +143,25 @@ const Layout: React.FC<{ children: ReactNode }> = ({ children }) => {
                   </NavLink>
                 </li>
               ))}
+              {/* botão sair visível no mobile dentro do menu */}
+              <li className="md:hidden ml-auto">
+                <button
+                  onClick={logout}
+                  className="inline-flex items-center rounded-xl px-3 py-1.5 text-sm bg-red-600 text-white hover:bg-red-700"
+                >
+                  Sair
+                </button>
+              </li>
             </ul>
-          </nav>
-          <Button variant="destructive" size="sm" onClick={logout}>
-            Sair
-          </Button>
-        </div>
+          </div>
+        </nav>
+
+        {/* sombra suave separando conteúdo */}
+        <div className="h-[10px] w-full bg-gradient-to-b from-black/5 to-transparent pointer-events-none" />
       </header>
-      {children}
+
+      {/* Conteúdo */}
+      <main className="mx-auto max-w-7xl px-4 sm:px-6 py-6">{children}</main>
     </div>
   );
 };
@@ -123,14 +198,14 @@ export default function App() {
           {/* Clientes */}
           <Route path="/clientes" element={<Clientes />} />
           <Route path="/clientes/novo" element={<ClienteForm />} />
-          <Route path="/clientes/:id/editar" element={<ClienteForm />} /> {/* ✅ edição */}
+          <Route path="/clientes/:id/editar" element={<ClienteForm />} />
           <Route path="/clientes/:id" element={<ClienteDetalhes />} />
           <Route path="/clientes/:id/documentos" element={<ClienteDocumentoForm />} />
 
           {/* Domínios */}
           <Route path="/dominios" element={<Dominios />} />
-          <Route path="/dominios/novo" element={<DominioForm />} />           {/* ✅ novo */}
-          <Route path="/dominios/:id/editar" element={<DominioForm />} />     {/* ✅ edição */}
+          <Route path="/dominios/novo" element={<DominioForm />} />
+          <Route path="/dominios/:id/editar" element={<DominioForm />} />
           <Route path="/dominios/:id/itens" element={<DominioItens />} />
 
           {/* Financeiro/auxiliares */}
@@ -138,6 +213,10 @@ export default function App() {
           <Route path="/historico-pagamentos" element={<HistoricoPagamentos />} />
           <Route path="/formas-pagamento" element={<FormaPagamentoForm />} />
           <Route path="/transportadoras" element={<TransportadoraForm />} />
+
+          {/* Financeiro */}
+          <Route path="/financeiro/receber" element={<FinanceiroReceber />} />
+          <Route path="/financeiro/conferencia" element={<Conferencia />} />
         </Route>
 
         {/* 404 */}

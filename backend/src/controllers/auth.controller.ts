@@ -60,7 +60,6 @@ export const login = async (req: Request, res: Response) => {
     if (error instanceof z.ZodError) {
       return res.status(400).json({ message: "Erro de validação", errors: error.errors });
     }
-    // eslint-disable-next-line no-console
     console.error("Erro no login:", error);
     res.status(500).json({ message: "Erro interno no servidor" });
   }
@@ -101,11 +100,9 @@ export const register = async (req: Request, res: Response) => {
     if (error instanceof z.ZodError) {
       return res.status(400).json({ message: "Erro de validação", errors: error.errors });
     }
-    // violação de unique (2627/2601) – por garantia
     if (error?.number === 2627 || error?.number === 2601) {
       return res.status(409).json({ message: "Email já cadastrado" });
     }
-    // eslint-disable-next-line no-console
     console.error("Erro no registro:", error);
     res.status(500).json({ message: "Erro interno no servidor" });
   }
@@ -114,7 +111,6 @@ export const register = async (req: Request, res: Response) => {
 export const me = async (req: AuthenticatedRequest, res: Response) => {
   if (!req.user) return res.status(401).json({ message: "Acesso não autorizado" });
   try {
-    // carrega dados “frescos” do banco (nome pode mudar, etc.)
     const result = await pool
       .request()
       .input("id", req.user.id)
@@ -133,7 +129,6 @@ export const me = async (req: AuthenticatedRequest, res: Response) => {
       ativo: Boolean(u.ativo),
     });
   } catch (error) {
-    // eslint-disable-next-line no-console
     console.error("Erro em /auth/me:", error);
     res.status(500).json({ message: "Erro interno no servidor" });
   }

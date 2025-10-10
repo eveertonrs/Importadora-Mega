@@ -1,12 +1,13 @@
+// src/components/DominioItemForm.tsx
 import React, { useState } from "react";
-import axios from "axios";
 import { useNavigate } from "react-router-dom";
+import api from "../services/api";
 
 interface DominioItemFormProps {
-  dominioId: string;
+  dominioId: string | number;
+  /** callback para recarregar a lista após criar */
+  onCreated?: () => void;
 }
-
-const API_URL = import.meta.env.VITE_API_URL ?? "https://x3nbflkg-3333.brs.devtunnels.ms";
 
 const Badge = ({ children }: { children: React.ReactNode }) => (
   <span className="inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200">
@@ -14,7 +15,7 @@ const Badge = ({ children }: { children: React.ReactNode }) => (
   </span>
 );
 
-const DominioItemForm: React.FC<DominioItemFormProps> = ({ dominioId }) => {
+const DominioItemForm: React.FC<DominioItemFormProps> = ({ dominioId, onCreated }) => {
   const [valor, setValor] = useState("");
   const [codigo, setCodigo] = useState("");
   const [ordem, setOrdem] = useState<string>("0");
@@ -39,40 +40,32 @@ const DominioItemForm: React.FC<DominioItemFormProps> = ({ dominioId }) => {
 
     try {
       setSaving(true);
-      const token = localStorage.getItem("token");
-      if (!token) {
-        navigate("/login");
-        return;
-      }
 
-      await axios.post(
-        `${API_URL}/dominios/${dominioId}/itens`,
-        {
-          valor: valor.trim(),
-          codigo: codigo.trim() || undefined,
-          ordem: toIntOrZero(ordem),
-          ativo,
-        },
-        { headers: { Authorization: `Bearer ${token}` } }
-      );
+      await api.post(`/dominios/${dominioId}/itens`, {
+        valor: valor.trim(),
+        codigo: codigo.trim() || undefined,
+        ordem: toIntOrZero(ordem),
+        ativo,
+      });
 
+      // limpa formulário
       setValor("");
       setCodigo("");
       setOrdem("0");
       setAtivo(true);
+
+      // avisa o pai para recarregar
+      onCreated?.();
     } catch (err: any) {
-      if (axios.isAxiosError(err)) {
-        if (err.response?.status === 401) {
-          navigate("/login");
-          return;
-        }
-        setError(
-          err.response?.data?.message ||
-            "Erro ao cadastrar item do domínio. Verifique se já não existe um item com esse valor."
-        );
-      } else {
-        setError("Ocorreu um erro. Tente novamente.");
+      if (err?.response?.status === 401) {
+        navigate("/login");
+        return;
       }
+      setError(
+        err?.response?.data?.message ||
+          "Erro ao cadastrar item do domínio. Verifique se já não existe um item com esse valor."
+      );
+      // eslint-disable-next-line no-console
       console.error("Erro ao cadastrar item do domínio:", err);
     } finally {
       setSaving(false);
@@ -97,7 +90,7 @@ const DominioItemForm: React.FC<DominioItemFormProps> = ({ dominioId }) => {
           <label htmlFor="valor" className="block text-sm font-medium text-slate-700">
             Valor *
           </label>
-        <input
+          <input
             id="valor"
             type="text"
             placeholder="Ex.: BOLETO 30/60/90"

@@ -14,7 +14,7 @@ router.use(protect);
 
 router
   .route("/")
-  .get(authorize("admin", "financeiro", "vendedor"), getTransportadoras) // suporta ?search=&page=&limit=
+  .get(authorize("admin", "financeiro", "vendedor"), getTransportadoras) // ?search=&page=&limit=&ativo=
   .post(authorize("admin", "financeiro"), createTransportadora);
 
 router

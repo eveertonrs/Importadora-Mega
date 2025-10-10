@@ -1,4 +1,3 @@
-// src/routes/fechamentos.routes.ts
 import { Router } from "express";
 import { protect, authorize } from "../middleware/auth.middleware";
 import {
@@ -9,7 +8,6 @@ import {
 
 const router = Router();
 
-// todas as rotas exigem autenticação
 router.use(protect);
 
 /**
@@ -23,8 +21,6 @@ router
 
 /**
  * POST /fechamentos/:data_ref/reprocess
- * Reprocessa (apaga itens e recaptura o snapshot do dia).
- * Mantém o cabeçalho de fechamento.
  */
 router.post(
   "/:data_ref/reprocess",

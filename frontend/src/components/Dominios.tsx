@@ -7,6 +7,7 @@ type Dominio = {
   id: number;
   chave: string;
   nome: string;
+  descricao?: string | null; // novo
   ativo: boolean;
 };
 
@@ -40,6 +41,7 @@ export default function Dominios() {
       (d) =>
         d.nome.toLowerCase().includes(q) ||
         d.chave.toLowerCase().includes(q) ||
+        (d.descricao ?? "").toLowerCase().includes(q) ||
         String(d.id).includes(q)
     );
   }, [rows, query, onlyStatus]);
@@ -53,7 +55,7 @@ export default function Dominios() {
             <label className="text-sm">Buscar</label>
             <input
               className="border rounded px-3 py-2"
-              placeholder="nome, chave ou #id…"
+              placeholder="nome, chave, descrição ou #id…"
               value={query}
               onChange={(e) => setQuery(e.target.value)}
             />
@@ -88,6 +90,7 @@ export default function Dominios() {
               <th className="p-2 border text-left">#</th>
               <th className="p-2 border text-left">Chave</th>
               <th className="p-2 border text-left">Nome</th>
+              <th className="p-2 border text-left">Descrição</th>
               <th className="p-2 border text-left">Status</th>
               <th className="p-2 border text-left">Ações</th>
             </tr>
@@ -98,6 +101,7 @@ export default function Dominios() {
                 <td className="p-2 border">{d.id}</td>
                 <td className="p-2 border font-mono">{d.chave}</td>
                 <td className="p-2 border">{d.nome}</td>
+                <td className="p-2 border">{d.descricao ?? "-"}</td>
                 <td className="p-2 border">
                   <span
                     className={`inline-flex items-center rounded-full px-2 py-0.5 text-xs font-medium ${
@@ -130,14 +134,14 @@ export default function Dominios() {
 
             {!loading && filtered.length === 0 && (
               <tr>
-                <td colSpan={5} className="p-4 text-center text-gray-500">
+                <td colSpan={6} className="p-4 text-center text-gray-500">
                   Nenhum domínio
                 </td>
               </tr>
             )}
             {loading && (
               <tr>
-                <td colSpan={5} className="p-4 text-center">
+                <td colSpan={6} className="p-4 text-center">
                   Carregando…
                 </td>
               </tr>

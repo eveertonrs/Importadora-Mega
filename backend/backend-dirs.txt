@@ -1,4 +1,0 @@
-﻿src
-src\controllers
-src\middleware
-src\routes

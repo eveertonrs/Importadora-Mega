@@ -1,5 +1,4 @@
-﻿// src/app.ts
-import express, { NextFunction, Request, Response } from "express";
+﻿import express, { NextFunction, Request, Response } from "express";
 import cors from "cors";
 import morgan from "morgan";
 
@@ -12,6 +11,8 @@ import fechamentosRoutes from "./routes/fechamentos.routes";
 import chequesRoutes from "./routes/cheques.routes";
 import formasPagamentoRoutes from "./routes/formasPagamento.routes";
 import pagamentosRoutes from "./routes/pagamentos.routes";
+import pedidoParametrosRoutes from "./routes/pedidoParametros.routes";
+import financeiroRoutes from "./routes/financeiro.routes";
 
 import { connectDB } from "./db";
 
@@ -20,7 +21,6 @@ const app = express();
 /* ---------- middlewares básicos ---------- */
 app.use(cors());
 app.use(morgan("dev"));
-// se preferir, ajuste o limite:
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: false }));
 
@@ -39,9 +39,11 @@ app.use("/fechamentos", fechamentosRoutes);
 app.use("/cheques", chequesRoutes);
 app.use("/pagamentos/formas", formasPagamentoRoutes);
 app.use("/pagamentos", pagamentosRoutes);
+app.use("/pedido-parametros", pedidoParametrosRoutes);
+app.use("/financeiro", financeiroRoutes);
 
 
-/* ---------- 404 para rotas não encontradas ---------- */
+/* ---------- 404 ---------- */
 app.use((req, res) => {
   res.status(404).json({
     message: "Rota não encontrada",
@@ -50,37 +52,26 @@ app.use((req, res) => {
   });
 });
 
-/* ---------- error handler (fallback) ---------- */
+/* ---------- error handler ---------- */
 app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
-  // se algum controller já devolveu status, respeita
   const status = err?.status || err?.statusCode || 500;
-
-  // mensagens amigáveis para erros comuns
   if (err?.name === "ZodError") {
     return res.status(400).json({ message: "Erro de validação", errors: err.errors });
   }
-
-  // log enxuto no servidor
-  // eslint-disable-next-line no-console
   console.error("Unhandled error:", err);
-
-  res.status(status).json({
-    message: err?.message || "Erro interno no servidor",
-  });
+  res.status(status).json({ message: err?.message || "Erro interno no servidor" });
 });
 
-/* ---------- bootstrap do servidor ---------- */
+/* ---------- bootstrap ---------- */
 const port = Number(process.env.PORT || 3333);
 
 async function start() {
   try {
-    await connectDB(); // só sobe a API depois de conectar no banco
+    await connectDB();
     app.listen(port, () => {
-      // eslint-disable-next-line no-console
       console.log(`API on :${port}`);
     });
   } catch (e) {
-    // eslint-disable-next-line no-console
     console.error("Falha ao iniciar a API:", e);
     process.exit(1);
   }

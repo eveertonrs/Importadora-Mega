@@ -1,8 +1,7 @@
-// src/components/ui/badge.tsx
 import React from "react";
 import { cn } from "../../lib/utils";
 
-type Tone = "success" | "warning" | "danger" | "neutral" | "info";
+export type Tone = "success" | "warning" | "danger" | "neutral" | "info";
 
 const tones: Record<Tone, string> = {
   success: "bg-emerald-100 text-emerald-700 ring-emerald-200",
@@ -12,15 +11,20 @@ const tones: Record<Tone, string> = {
   info:    "bg-blue-100 text-blue-700 ring-blue-200",
 };
 
+type Props = {
+  tone?: Tone;
+  className?: string;
+  children: React.ReactNode;
+  /** texto acessível opcional — útil quando o conteúdo for um ícone */
+  ariaLabel?: string;
+};
+
 export default function Badge({
   tone = "neutral",
   className,
   children,
-}: {
-  tone?: Tone;
-  className?: string;
-  children: React.ReactNode;
-}) {
+  ariaLabel,
+}: Props) {
   return (
     <span
       className={cn(
@@ -28,6 +32,8 @@ export default function Badge({
         tones[tone],
         className
       )}
+      aria-label={ariaLabel}
+      role="status"
     >
       {children}
     </span>

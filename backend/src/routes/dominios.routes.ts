@@ -7,7 +7,7 @@ import {
   updateDominio,
   deleteDominio,
   getDominioItens,
-  getDominioItemById,   // <- exposto
+  getDominioItemById,
   createDominioItem,
   updateDominioItem,
   deleteDominioItem,
@@ -21,24 +21,24 @@ router.use(protect);
 router
   .route("/")
   .get(authorize("admin", "financeiro", "vendedor"), getDominios)
-  .post(authorize("admin", "financeiro"), createDominio); // <- opcional abrir p/ financeiro
+  .post(authorize("admin", "financeiro"), createDominio);
 
 router
   .route("/:id")
   .get(authorize("admin", "financeiro", "vendedor"), getDominioById)
-  .put(authorize("admin", "financeiro"), updateDominio)   // <- opcional abrir p/ financeiro
+  .put(authorize("admin", "financeiro"), updateDominio)
   .delete(authorize("admin"), deleteDominio);
 
 // Itens do Domínio
 router
   .route("/:dominio_id/itens")
   .get(authorize("admin", "financeiro", "vendedor"), getDominioItens)
-  .post(authorize("admin", "financeiro"), createDominioItem); // <- opcional abrir p/ financeiro
+  .post(authorize("admin", "financeiro"), createDominioItem);
 
 router
   .route("/:dominio_id/itens/:id")
-  .get(authorize("admin", "financeiro", "vendedor"), getDominioItemById) // <- novo GET
-  .put(authorize("admin", "financeiro"), updateDominioItem)              // <- opcional abrir p/ financeiro
+  .get(authorize("admin", "financeiro", "vendedor"), getDominioItemById)
+  .put(authorize("admin", "financeiro"), updateDominioItem)
   .delete(authorize("admin"), deleteDominioItem);
 
 export default router;

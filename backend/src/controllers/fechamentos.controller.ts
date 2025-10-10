@@ -1,4 +1,3 @@
-// src/controllers/fechamentos.controller.ts
 import { Response } from "express";
 import { z } from "zod";
 import { pool } from "../db";
@@ -168,7 +167,7 @@ export const getFechamento = async (req: AuthenticatedRequest, res: Response) =>
         ORDER BY bl.tipo_recebimento, bl.bom_para, fi.lancamento_id
       `);
 
-    // agregados (3 queries separadas p/ evitar erro de tipagem)
+    // agregados
     const geraisRs = await pool
       .request()
       .input("data_ref", sql.Date, validatedDate)

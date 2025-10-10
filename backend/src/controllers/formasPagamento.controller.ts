@@ -2,36 +2,46 @@ import { Request, Response } from "express";
 import { z } from "zod";
 import { pool } from "../db";
 
-const DOMINIO_CHAVE = "FORMA_PAGAMENTO";
+/**
+ * Agora este controller é genérico:
+ *   ?tipo=saida   -> domínio FORMA_PAGAMENTO_SAIDA (DEFAULT)
+ *   ?tipo=entrada -> domínio TIPO_ENTRADA
+ */
 
-// Schemas (mapeando nome -> valor em dominio_itens)
+type TipoDominio = "entrada" | "saida";
+
 const formaPagamentoSchema = z.object({
   nome: z.string().min(1, "Nome é obrigatório"),
   ativo: z.boolean().default(true),
-  codigo: z.string().optional(),
+  codigo: z.string().optional().nullable(),
   ordem: z.number().int().default(0),
+  descricao: z.string().optional().nullable(),
 });
 
 const formaPagamentoUpdateSchema = formaPagamentoSchema.partial();
 
+function getDominioConfig(req: Request): { chave: string; nome: string } {
+  const tipo = String(req.query.tipo ?? "saida").toLowerCase() as TipoDominio;
+  if (tipo === "entrada") {
+    return { chave: "TIPO_ENTRADA", nome: "Tipos de Entrada" };
+  }
+  return { chave: "FORMA_PAGAMENTO_SAIDA", nome: "Formas de Pagamento (Saída)" };
+}
+
 // Garante que o domínio exista e retorna seu id
-async function ensureDominioId(): Promise<number> {
-  // tenta buscar
+async function ensureDominioId(chave: string, nome: string): Promise<number> {
   let r = await pool
     .request()
-    .input("chave", DOMINIO_CHAVE)
+    .input("chave", chave)
     .query("SELECT id FROM dominios WHERE chave = @chave");
 
-  if (r.recordset.length > 0) {
-    return r.recordset[0].id as number;
-  }
+  if (r.recordset.length > 0) return r.recordset[0].id as number;
 
-  // cria se não existir
   try {
     r = await pool
       .request()
-      .input("chave", DOMINIO_CHAVE)
-      .input("nome", "Formas de Pagamento")
+      .input("chave", chave)
+      .input("nome", nome)
       .input("ativo", true)
       .query(
         `INSERT INTO dominios (chave, nome, ativo)
@@ -40,15 +50,12 @@ async function ensureDominioId(): Promise<number> {
       );
     return r.recordset[0].id as number;
   } catch (err: any) {
-    // condição de corrida: outro request inseriu antes
-    if (err?.number === 2627) {
+    if (err?.number === 2627 || err?.number === 2601) {
       const again = await pool
         .request()
-        .input("chave", DOMINIO_CHAVE)
+        .input("chave", chave)
         .query("SELECT id FROM dominios WHERE chave = @chave");
-      if (again.recordset.length > 0) {
-        return again.recordset[0].id as number;
-      }
+      if (again.recordset.length > 0) return again.recordset[0].id as number;
     }
     throw err;
   }
@@ -57,7 +64,9 @@ async function ensureDominioId(): Promise<number> {
 // LISTAR
 export const getFormasPagamento = async (req: Request, res: Response) => {
   try {
-    const dominioId = await ensureDominioId();
+    const { chave, nome } = getDominioConfig(req);
+    const dominioId = await ensureDominioId(chave, nome);
+
     const result = await pool
       .request()
       .input("dominio_id", dominioId)
@@ -66,7 +75,8 @@ export const getFormasPagamento = async (req: Request, res: Response) => {
                 valor       AS nome,
                 ativo,
                 codigo,
-                ordem
+                ordem,
+                descricao
            FROM dominio_itens
           WHERE dominio_id = @dominio_id
           ORDER BY ordem, valor`
@@ -74,7 +84,7 @@ export const getFormasPagamento = async (req: Request, res: Response) => {
 
     res.json(result.recordset);
   } catch (error) {
-    console.error("Erro ao buscar formas de pagamento:", error);
+    console.error("Erro ao buscar itens do domínio de pagamento/entrada:", error);
     res.status(500).json({ message: "Erro interno no servidor" });
   }
 };
@@ -84,7 +94,9 @@ export const getFormaPagamentoById = async (req: Request, res: Response) => {
   const { id } = req.params;
 
   try {
-    const dominioId = await ensureDominioId();
+    const { chave, nome } = getDominioConfig(req);
+    const dominioId = await ensureDominioId(chave, nome);
+
     const result = await pool
       .request()
       .input("id", id)
@@ -94,18 +106,19 @@ export const getFormaPagamentoById = async (req: Request, res: Response) => {
                 valor AS nome,
                 ativo,
                 codigo,
-                ordem
+                ordem,
+                descricao
            FROM dominio_itens
           WHERE id = @id AND dominio_id = @dominio_id`
       );
 
     if (result.recordset.length === 0) {
-      return res.status(404).json({ message: "Forma de pagamento não encontrada" });
+      return res.status(404).json({ message: "Registro não encontrado" });
     }
 
     res.json(result.recordset[0]);
   } catch (error) {
-    console.error("Erro ao buscar forma de pagamento:", error);
+    console.error("Erro ao buscar registro:", error);
     res.status(500).json({ message: "Erro interno no servidor" });
   }
 };
@@ -114,31 +127,36 @@ export const getFormaPagamentoById = async (req: Request, res: Response) => {
 export const createFormaPagamento = async (req: Request, res: Response) => {
   try {
     const data = formaPagamentoSchema.parse(req.body);
-    const dominioId = await ensureDominioId();
+    const { chave, nome } = getDominioConfig(req);
+    const dominioId = await ensureDominioId(chave, nome);
 
     const result = await pool
       .request()
       .input("dominio_id", dominioId)
-      .input("valor", data.nome)     // mapeia nome -> valor
+      .input("valor", data.nome) // mapeia nome -> valor
       .input("ativo", data.ativo)
       .input("codigo", data.codigo ?? null)
       .input("ordem", data.ordem ?? 0)
+      .input("descricao", data.descricao ?? null)
       .query(
-        `INSERT INTO dominio_itens (dominio_id, valor, codigo, ordem, ativo)
-         OUTPUT INSERTED.id, INSERTED.valor AS nome, INSERTED.ativo, INSERTED.codigo, INSERTED.ordem
-         VALUES (@dominio_id, @valor, @codigo, @ordem, @ativo)`
+        `INSERT INTO dominio_itens (dominio_id, valor, codigo, ordem, descricao, ativo)
+         OUTPUT INSERTED.id, INSERTED.valor AS nome, INSERTED.ativo, INSERTED.codigo, INSERTED.ordem, INSERTED.descricao
+         VALUES (@dominio_id, @valor, @codigo, @ordem, @descricao, @ativo)`
       );
 
     res.status(201).json(result.recordset[0]);
   } catch (error) {
     if (error instanceof z.ZodError) {
-      return res.status(400).json({ message: "Erro de validação", errors: error.errors });
+      return res
+        .status(400)
+        .json({ message: "Erro de validação", errors: error.errors });
     }
-    // violação do unique (dominio_id, valor)
-    if ((error as any)?.number === 2627) {
-      return res.status(409).json({ message: "Já existe uma forma de pagamento com esse nome." });
+    if ((error as any)?.number === 2627 || (error as any)?.number === 2601) {
+      return res
+        .status(409)
+        .json({ message: "Já existe um item com esse nome." });
     }
-    console.error("Erro ao criar forma de pagamento:", error);
+    console.error("Erro ao criar registro:", error);
     res.status(500).json({ message: "Erro interno no servidor" });
   }
 };
@@ -153,7 +171,8 @@ export const updateFormaPagamento = async (req: Request, res: Response) => {
       return res.status(400).json({ message: "Nenhum campo para atualizar" });
     }
 
-    const dominioId = await ensureDominioId();
+    const { chave, nome } = getDominioConfig(req);
+    const dominioId = await ensureDominioId(chave, nome);
 
     // Monta SET com mapeamento nome->valor
     const mapKey = (k: string) => (k === "nome" ? "valor" : k);
@@ -167,23 +186,27 @@ export const updateFormaPagamento = async (req: Request, res: Response) => {
     const result = await request.query(
       `UPDATE dominio_itens
           SET ${fields}
-        OUTPUT INSERTED.id, INSERTED.valor AS nome, INSERTED.ativo, INSERTED.codigo, INSERTED.ordem
+        OUTPUT INSERTED.id, INSERTED.valor AS nome, INSERTED.ativo, INSERTED.codigo, INSERTED.ordem, INSERTED.descricao
         WHERE id = @id AND dominio_id = @dominio_id`
     );
 
     if (result.recordset.length === 0) {
-      return res.status(404).json({ message: "Forma de pagamento não encontrada" });
+      return res.status(404).json({ message: "Registro não encontrado" });
     }
 
     res.json(result.recordset[0]);
   } catch (error) {
     if (error instanceof z.ZodError) {
-      return res.status(400).json({ message: "Erro de validação", errors: error.errors });
+      return res
+        .status(400)
+        .json({ message: "Erro de validação", errors: error.errors });
     }
-    if ((error as any)?.number === 2627) {
-      return res.status(409).json({ message: "Já existe uma forma de pagamento com esse nome." });
+    if ((error as any)?.number === 2627 || (error as any)?.number === 2601) {
+      return res
+        .status(409)
+        .json({ message: "Já existe um item com esse nome." });
     }
-    console.error("Erro ao atualizar forma de pagamento:", error);
+    console.error("Erro ao atualizar registro:", error);
     res.status(500).json({ message: "Erro interno no servidor" });
   }
 };
@@ -193,7 +216,9 @@ export const deleteFormaPagamento = async (req: Request, res: Response) => {
   const { id } = req.params;
 
   try {
-    const dominioId = await ensureDominioId();
+    const { chave, nome } = getDominioConfig(req);
+    const dominioId = await ensureDominioId(chave, nome);
+
     const result = await pool
       .request()
       .input("id", id)
@@ -201,12 +226,12 @@ export const deleteFormaPagamento = async (req: Request, res: Response) => {
       .query("DELETE FROM dominio_itens WHERE id = @id AND dominio_id = @dominio_id");
 
     if (result.rowsAffected[0] === 0) {
-      return res.status(404).json({ message: "Forma de pagamento não encontrada" });
+      return res.status(404).json({ message: "Registro não encontrado" });
     }
 
     res.status(204).send();
   } catch (error) {
-    console.error("Erro ao deletar forma de pagamento:", error);
+    console.error("Erro ao deletar registro:", error);
     res.status(500).json({ message: "Erro interno no servidor" });
   }
 };

@@ -1,8 +1,8 @@
 import axios from "axios";
 
 /** Tipos para o notificador (toast/alert) */
-type Type = "success" | "error" | "info" | "warning";
-type Notifier = (type: Type, message: string) => void;
+export type Type = "success" | "error" | "info" | "warning";
+export type Notifier = (type: Type, message: string) => void;
 
 let notifier: Notifier | null = null;
 
@@ -33,14 +33,23 @@ api.interceptors.request.use((cfg) => {
 api.interceptors.response.use(
   (res) => res,
   (err) => {
-    const msg =
-      err?.response?.data?.message ||
-      err?.response?.data?.error ||
-      err?.message ||
-      "Erro inesperado";
-    notifier?.("error", msg);
+    // 🔇 silencie se o caller pediu
+    const silent =
+      err?.config?.headers?.["x-silent"] === "1" ||
+      err?.config?.meta?.silent === true;
+
+    if (!silent) {
+      const msg =
+        err?.response?.data?.message ||
+        err?.response?.data?.error ||
+        err?.message ||
+        "Erro inesperado";
+      notifier?.("error", msg);
+    }
     return Promise.reject(err);
   }
 );
 
+// ✅ export default + export nomeado (para qualquer estilo de import)
+export { api };
 export default api;

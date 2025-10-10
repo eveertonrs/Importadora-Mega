@@ -1,7 +1,7 @@
 import { Request, Response, NextFunction } from "express";
 import jwt, { JwtPayload } from "jsonwebtoken";
 
-export type Permissao = "admin" | "financeiro" | "vendedor";
+export type Permissao = "admin" | "administrador" | "financeiro" | "vendedor";
 
 export interface AuthenticatedUser {
   id: number;
@@ -42,19 +42,29 @@ export const protect = (req: AuthenticatedRequest, res: Response, next: NextFunc
 
     next();
   } catch (error) {
-    // eslint-disable-next-line no-console
     console.error("Erro de autenticação:", error);
     return res.status(401).json({ message: "Token inválido ou expirado" });
   }
 };
 
+/**
+ * authorize() - middleware de permissão
+ * Aceita múltiplos papéis (ex: authorize("admin", "financeiro"))
+ * Diferencia 401 (sem token) e 403 (sem permissão).
+ */
 export const authorize =
   (...roles: Permissao[]) =>
   (req: AuthenticatedRequest, res: Response, next: NextFunction) => {
     if (!req.user) return res.status(401).json({ message: "Acesso não autorizado" });
-    const allowed = new Set(roles.map((r) => r.toLowerCase()));
-    if (!allowed.has(req.user.permissao)) {
+
+    // Se nenhum papel foi especificado → qualquer usuário autenticado passa
+    if (roles.length === 0) return next();
+
+    const userRole = req.user.permissao.toLowerCase();
+    const allowed = roles.map((r) => r.toLowerCase());
+    if (!allowed.includes(userRole)) {
       return res.status(403).json({ message: "Você não tem permissão para esta ação" });
     }
+
     next();
   };

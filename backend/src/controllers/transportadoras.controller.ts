@@ -6,6 +6,9 @@ import { pool } from "../db";
 const toDbNull = (v?: string | null) =>
   v === undefined || v === null || (typeof v === "string" && v.trim() === "") ? null : v;
 
+const onlyDigits = (s?: string | null) =>
+  s == null ? null : s.replace(/\D+/g, "") || null;
+
 /* ---------- schemas ---------- */
 const transportadoraSchema = z.object({
   razao_social: z.string().min(1, "Razão Social é obrigatória"),
@@ -20,26 +23,36 @@ const transportadoraSchema = z.object({
 /* ---------- listagem com busca/paginação ---------- */
 export const getTransportadoras = async (req: Request, res: Response) => {
   try {
-    const page = Number(req.query.page ?? 1);
-    const limit = Math.min(Number(req.query.limit ?? 20), 200);
+    const page = Math.max(1, Number(req.query.page ?? 1));
+    const limit = Math.min(Math.max(1, Number(req.query.limit ?? 20)), 200);
     const search = String(req.query.search ?? "").trim();
+    const ativo = typeof req.query.ativo === "string" ? req.query.ativo.trim() : "";
     const offset = (page - 1) * limit;
 
-    let where = "1=1";
+    const where: string[] = [];
     const reqList = pool.request();
     const reqCount = pool.request();
 
     if (search) {
-      where += " AND (razao_social LIKE @s OR cnpj LIKE @s OR telefone LIKE @s)";
+      // usa IX_transportadoras_busca (razao_social) e IX_transportadoras_cnpj
+      where.push("(razao_social LIKE @s OR cnpj LIKE @s OR telefone LIKE @s)");
       reqList.input("s", `%${search}%`);
       reqCount.input("s", `%${search}%`);
     }
 
-    const countSql = `SELECT COUNT(*) AS total FROM transportadoras WHERE ${where}`;
+    if (ativo === "1" || ativo.toUpperCase() === "TRUE") {
+      where.push("ativo = 1");
+    } else if (ativo === "0" || ativo.toUpperCase() === "FALSE") {
+      where.push("ativo = 0");
+    }
+
+    const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
+
+    const countSql = `SELECT COUNT(*) AS total FROM transportadoras ${whereSql}`;
     const listSql = `
-      SELECT *
+      SELECT id, razao_social, cnpj, forma_envio, telefone, endereco, referencia, ativo
       FROM transportadoras
-      WHERE ${where}
+      ${whereSql}
       ORDER BY razao_social
       OFFSET @offset ROWS FETCH NEXT @limit ROWS ONLY
     `;
@@ -62,7 +75,12 @@ export const getTransportadoras = async (req: Request, res: Response) => {
 export const getTransportadoraById = async (req: Request, res: Response) => {
   const { id } = req.params;
   try {
-    const rs = await pool.request().input("id", +id).query("SELECT * FROM transportadoras WHERE id = @id");
+    const rs = await pool
+      .request()
+      .input("id", +id)
+      .query(
+        "SELECT id, razao_social, cnpj, forma_envio, telefone, endereco, referencia, ativo FROM transportadoras WHERE id = @id"
+      );
     if (!rs.recordset.length) return res.status(404).json({ message: "Transportadora não encontrada" });
     res.json(rs.recordset[0]);
   } catch (error) {
@@ -75,19 +93,35 @@ export const createTransportadora = async (req: Request, res: Response) => {
   try {
     const d = transportadoraSchema.parse(req.body);
 
+    // normalizações leves (aderente ao que vínhamos fazendo)
+    const cnpj = onlyDigits(d.cnpj ?? null);
+    const telefone = onlyDigits(d.telefone ?? null);
+
+    // como o índice de CNPJ não é único no DB, garantimos no app
+    if (cnpj) {
+      const dup = await pool
+        .request()
+        .input("cnpj", cnpj)
+        .query("SELECT TOP 1 id FROM transportadoras WHERE cnpj = @cnpj");
+      if (dup.recordset.length) {
+        return res.status(409).json({ message: "CNPJ já cadastrado." });
+      }
+    }
+
     const rs = await pool
       .request()
       .input("razao_social", d.razao_social)
-      .input("cnpj", toDbNull(d.cnpj ?? null))
+      .input("cnpj", toDbNull(cnpj))
       .input("forma_envio", toDbNull(d.forma_envio ?? null))
-      .input("telefone", toDbNull(d.telefone ?? null))
+      .input("telefone", toDbNull(telefone))
       .input("endereco", toDbNull(d.endereco ?? null))
       .input("referencia", toDbNull(d.referencia ?? null))
       .input("ativo", d.ativo ?? true)
       .query(`
         INSERT INTO transportadoras
           (razao_social, cnpj, forma_envio, telefone, endereco, referencia, ativo)
-        OUTPUT INSERTED.*
+        OUTPUT INSERTED.id, INSERTED.razao_social, INSERTED.cnpj, INSERTED.forma_envio, INSERTED.telefone,
+               INSERTED.endereco, INSERTED.referencia, INSERTED.ativo
         VALUES
           (@razao_social, @cnpj, @forma_envio, @telefone, @endereco, @referencia, @ativo)
       `);
@@ -97,13 +131,9 @@ export const createTransportadora = async (req: Request, res: Response) => {
     if (error instanceof z.ZodError) {
       return res.status(400).json({ message: "Erro de validação", errors: error.errors });
     }
-    if (error?.number === 2627) {
-      return res.status(409).json({ message: "CNPJ já cadastrado." });
-    }
     console.error("Erro ao criar transportadora:", error);
     res.status(500).json({
       message: "Erro interno no servidor",
-      // dica de debug controlada (ajuda em dev):
       detail: error?.message ?? undefined,
       code: error?.number ?? undefined,
     });
@@ -117,12 +147,26 @@ export const updateTransportadora = async (req: Request, res: Response) => {
 
     const sanitized: Record<string, any> = {};
     for (const [k, v] of Object.entries(d)) {
-      sanitized[k] =
-        ["cnpj", "forma_envio", "telefone", "endereco", "referencia"].includes(k) ? toDbNull(v as any) : v;
+      if (k === "cnpj") sanitized.cnpj = toDbNull(onlyDigits(v as string | null));
+      else if (k === "telefone") sanitized.telefone = toDbNull(onlyDigits(v as string | null));
+      else if (["forma_envio", "endereco", "referencia"].includes(k)) sanitized[k] = toDbNull(v as any);
+      else sanitized[k] = v;
+    }
+
+    // checagem de duplicidade de CNPJ quando alterado
+    if (sanitized.cnpj) {
+      const dup = await pool
+        .request()
+        .input("cnpj", sanitized.cnpj)
+        .input("id", +id)
+        .query("SELECT TOP 1 id FROM transportadoras WHERE cnpj = @cnpj AND id <> @id");
+      if (dup.recordset.length) {
+        return res.status(409).json({ message: "CNPJ já cadastrado." });
+      }
     }
 
     const fields = Object.keys(sanitized)
-      .map((k) => `${k}=@${k}`)
+      .map((k) => `${k} = @${k}`)
       .join(", ");
     if (!fields) return res.status(400).json({ message: "Nenhum campo para atualizar" });
 
@@ -132,7 +176,8 @@ export const updateTransportadora = async (req: Request, res: Response) => {
     const rs = await reqDb.query(`
       UPDATE transportadoras
          SET ${fields}
-       OUTPUT INSERTED.*
+       OUTPUT INSERTED.id, INSERTED.razao_social, INSERTED.cnpj, INSERTED.forma_envio, INSERTED.telefone,
+              INSERTED.endereco, INSERTED.referencia, INSERTED.ativo
        WHERE id = @id
     `);
 
@@ -141,9 +186,6 @@ export const updateTransportadora = async (req: Request, res: Response) => {
   } catch (error: any) {
     if (error instanceof z.ZodError) {
       return res.status(400).json({ message: "Erro de validação", errors: error.errors });
-    }
-    if (error?.number === 2627) {
-      return res.status(409).json({ message: "CNPJ já cadastrado." });
     }
     console.error("Erro ao atualizar transportadora:", error);
     res.status(500).json({
