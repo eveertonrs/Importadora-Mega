@@ -12,6 +12,7 @@ export type Titulo = {
   valor_baixado: number;
   status: "ABERTO" | "PARCIAL" | "BAIXADO" | "DEVOLVIDO" | "CANCELADO";
   observacao?: string | null;
+  bloco_id?: number | null;
 };
 
 export async function listarTitulos(params: {
@@ -42,11 +43,40 @@ export async function atualizarTitulo(id: number, patch: Partial<Titulo>) {
   return data;
 }
 
+/* ====================== Conferência ====================== */
+
+export type OrigemConferencia = "BLOCO_LANC" | "TITULO" | "BAIXA";
+export type StatusConferencia = "PENDENTE" | "CONFIRMADO" | "DIVERGENTE";
+
+export type ConferenciaItem = {
+  id: number;
+  origem: OrigemConferencia;
+  origem_id: number;
+  data_evento: string; // yyyy-mm-dd
+
+  cliente_id: number;
+  cliente_nome?: string | null;
+
+  tipo: string;
+  numero_doc?: string | null;
+  bom_para?: string | null;
+
+  valor: number;
+  valor_baixado?: number;
+
+  status_negocio?: string;
+  status_conferencia?: StatusConferencia;
+  comentario?: string | null;
+
+  bloco_id?: number | null;
+  titulo_id?: number | null;
+};
+
 export type ConferenciaResult = {
   data: string;
   total: number;
   resumo: Record<string, number>;
-  titulos: Titulo[];
+  itens: ConferenciaItem[];  // << agora existe 'itens'
 };
 
 export async function conferenciaDiaria(params: {
@@ -56,4 +86,38 @@ export async function conferenciaDiaria(params: {
 }) {
   const { data } = await api.get("/financeiro/conferencia", { params });
   return data as ConferenciaResult;
+}
+
+type ConferenciaUpsertPayload = {
+  data?: string;
+  status: StatusConferencia;
+  comentario?: string;
+  itens: Array<{ origem: OrigemConferencia; origem_id: number }>;
+};
+
+export async function conferenciaAtualizar(payload: ConferenciaUpsertPayload) {
+  const { data } = await api.patch("/financeiro/conferencia", payload);
+  return data;
+}
+
+export async function conferenciaConfirmar(args: {
+  data?: string;
+  itens: Array<{ origem: OrigemConferencia; origem_id: number }>;
+}) {
+  return conferenciaAtualizar({ status: "CONFIRMADO", itens: args.itens, data: args.data });
+}
+
+export async function conferenciaDivergir(args: {
+  data?: string;
+  comentario: string;
+  itens: Array<{ origem: OrigemConferencia; origem_id: number }>;
+}) {
+  return conferenciaAtualizar({ status: "DIVERGENTE", comentario: args.comentario, itens: args.itens, data: args.data });
+}
+
+export async function conferenciaDesfazer(args: {
+  data?: string;
+  itens: Array<{ origem: OrigemConferencia; origem_id: number }>;
+}) {
+  return conferenciaAtualizar({ status: "PENDENTE", itens: args.itens, data: args.data });
 }

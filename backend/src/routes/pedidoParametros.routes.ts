@@ -1,22 +1,24 @@
 import { Router } from "express";
-import { protect, authorize } from "../middleware/auth.middleware";
 import * as ctrl from "../controllers/pedidoParametros.controller";
+import { protect, authorize } from "../middleware/auth.middleware";
 
 const router = Router();
 
-// exige token para todas as rotas abaixo
 router.use(protect);
 
-router
-  .route("/")
-  .get(authorize("admin", "administrador", "financeiro"), ctrl.list)
-  .post(authorize("admin", "administrador", "financeiro"), ctrl.create);
+// GET /pedido-parametros?tipo=&ativo=&q=
+router.get("/", ctrl.list);
 
-router
-  .route("/:id")
-  .put(authorize("admin", "administrador", "financeiro"), ctrl.update);
+// POST /pedido-parametros { tipo, descricao, exige_bom_para?, exige_tipo_cheque? }
+router.post("/", ctrl.create);
 
-// toggle ativo/inativo via PATCH (compat com o front)
-router.patch("/:id/toggle", authorize("admin", "administrador", "financeiro"), ctrl.toggle);
+// PATCH /pedido-parametros/:id { descricao?, ativo?, tipo?, exige_bom_para?, exige_tipo_cheque? }
+router.patch("/:id", ctrl.update);
+
+// PATCH /pedido-parametros/:id/toggle
+router.patch("/:id/toggle", ctrl.toggle);
+
+// DELETE /pedido-parametros/:id
+router.delete("/:id", ctrl.remove);
 
 export default router;

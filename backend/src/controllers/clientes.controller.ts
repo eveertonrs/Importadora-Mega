@@ -3,74 +3,6 @@ import { z } from "zod";
 import sql from "mssql";
 import { pool } from "../db";
 
-/**
- * Agora este controller é genérico:
- *   ?tipo=saida   -> domínio FORMA_PAGAMENTO_SAIDA (DEFAULT)
- *   ?tipo=entrada -> domínio TIPO_ENTRADA
- */
-
-type TipoDominio = "entrada" | "saida";
-
-const formaPagamentoSchema = z.object({
-  nome: z.string().min(1, "Nome é obrigatório"),
-  ativo: z.boolean().default(true),
-  codigo: z.string().optional().nullable(),
-  ordem: z.number().int().default(0),
-  descricao: z.string().optional().nullable(),
-});
-
-function toDbNull<T>(v: T | undefined | null): T | null {
-  if (v === undefined || v === null) return null;
-  if (typeof v === "string") {
-    const s = v.trim();
-    return (s === "" ? null : (s as unknown as T));
-  }
-  return v as unknown as T;
-}
-
-const formaPagamentoUpdateSchema = formaPagamentoSchema.partial();
-
-function getDominioConfig(req: Request): { chave: string; nome: string } {
-  const tipo = String(req.query.tipo ?? "saida").toLowerCase() as TipoDominio;
-  if (tipo === "entrada") {
-    return { chave: "TIPO_ENTRADA", nome: "Tipos de Entrada" };
-  }
-  return { chave: "FORMA_PAGAMENTO_SAIDA", nome: "Formas de Pagamento (Saída)" };
-}
-
-// Garante que o domínio exista e retorna seu id
-async function ensureDominioId(chave: string, nome: string): Promise<number> {
-  let r = await pool
-    .request()
-    .input("chave", chave)
-    .query("SELECT id FROM dominios WHERE chave = @chave");
-
-  if (r.recordset.length > 0) return r.recordset[0].id as number;
-
-  try {
-    r = await pool
-      .request()
-      .input("chave", chave)
-      .input("nome", nome)
-      .input("ativo", true)
-      .query(
-        `INSERT INTO dominios (chave, nome, ativo)
-         OUTPUT INSERTED.id
-         VALUES (@chave, @nome, @ativo)`
-      );
-    return r.recordset[0].id as number;
-  } catch (err: any) {
-    if (err?.number === 2627 || err?.number === 2601) {
-      const again = await pool
-        .request()
-        .input("chave", chave)
-        .query("SELECT id FROM dominios WHERE chave = @chave");
-      if (again.recordset.length > 0) return again.recordset[0].id as number;
-    }
-    throw err;
-  }
-}
-
 /* ========================= LISTAGEM / BUSCA ========================= */
 
 // GET /clientes
@@ -142,23 +74,26 @@ export const getClienteById = async (req: Request, res: Response) => {
       .request()
       .input("id", +id)
       .query(`
-      SELECT id, nome_fantasia, grupo_empresa, tabela_preco, status, whatsapp, links_json, anotacoes, criado_em, atualizado_em, recebe_whatsapp
-      FROM clientes WHERE id = @id
-    `);
+        SELECT id, nome_fantasia, grupo_empresa, tabela_preco, status, whatsapp, links_json, anotacoes, criado_em, atualizado_em, recebe_whatsapp
+        FROM clientes WHERE id = @id
+      `);
 
     if (clienteRs.recordset.length === 0) {
       return res.status(404).json({ message: "Cliente não encontrado" });
     }
 
+    // Saldo "imediato" considerando blocos ABERTOS **ignorando bom_para**
     const saldoOpenRs = await pool
       .request()
       .input("id", +id)
       .query(`
         SELECT
           COALESCE(SUM(
-            CASE WHEN bl.sentido = 'SAIDA'   THEN bl.valor
-                WHEN bl.sentido = 'ENTRADA' THEN -bl.valor
-                ELSE 0 END
+            CASE
+              WHEN bl.bom_para IS NULL AND bl.sentido = 'SAIDA'   THEN bl.valor
+              WHEN bl.bom_para IS NULL AND bl.sentido = 'ENTRADA' THEN -bl.valor
+              ELSE 0
+            END
           ), 0) AS saldo_aberto
         FROM blocos b
         LEFT JOIN bloco_lancamentos bl ON bl.bloco_id = b.id
@@ -166,99 +101,57 @@ export const getClienteById = async (req: Request, res: Response) => {
           AND b.status = 'ABERTO'
       `);
     const saldo_aberto = Number(saldoOpenRs.recordset[0]?.saldo_aberto ?? 0);
-    // crédito pendente
-    const pendRs = await pool
-      .request()
-      .input("entidade", sql.VarChar(50), "credito_cliente")
-      .input("entidade_id", sql.VarChar(50), String(id))
-      .query(`
-        ;WITH gerados AS (
-          SELECT l.id, TRY_CONVERT(decimal(18,2), JSON_VALUE(l.payload_json, '$.valor')) AS valor
-          FROM auditoria_logs l
-          WHERE l.entidade = @entidade
-            AND l.entidade_id = @entidade_id
-            AND l.acao = 'GERADO'
-        ),
-        consumidos AS (
-          SELECT JSON_VALUE(c.payload_json, '$.orig_log_id') AS orig_id_str
-          FROM auditoria_logs c
-          WHERE c.entidade = @entidade
-            AND c.entidade_id = @entidade_id
-            AND c.acao = 'CONSUMIDO'
-        )
-        SELECT COALESCE(SUM(g.valor), 0) AS credito_pendente
-        FROM gerados g
-        WHERE g.valor > 0
-          AND NOT EXISTS (
-            SELECT 1 FROM consumidos c
-            WHERE c.orig_id_str = CONVERT(varchar(20), g.id)
-          );
-      `);
-    const credito_pendente = Number(pendRs.recordset[0]?.credito_pendente ?? 0);
 
-    // débito pendente (NOVO)
-    const debPendRs = await pool
+    // A RECEBER (títulos em ABERTO/PARCIAL)
+    const aReceberRs = await pool
       .request()
-      .input("entidade", sql.VarChar(50), "debito_cliente")
-      .input("entidade_id", sql.VarChar(50), String(id))
+      .input("id", +id)
       .query(`
-        ;WITH gerados AS (
-          SELECT l.id, TRY_CONVERT(decimal(18,2), JSON_VALUE(l.payload_json, '$.valor')) AS valor
-          FROM auditoria_logs l
-          WHERE l.entidade = @entidade
-            AND l.entidade_id = @entidade_id
-            AND l.acao = 'GERADO'
-        ),
-        consumidos AS (
-          SELECT JSON_VALUE(c.payload_json, '$.orig_log_id') AS orig_id_str
-          FROM auditoria_logs c
-          WHERE c.entidade = @entidade
-            AND c.entidade_id = @entidade_id
-            AND c.acao = 'CONSUMIDO'
-        )
-        SELECT COALESCE(SUM(g.valor), 0) AS debito_pendente
-        FROM gerados g
-        WHERE g.valor > 0
-          AND NOT EXISTS (
-            SELECT 1 FROM consumidos c
-            WHERE c.orig_id_str = CONVERT(varchar(20), g.id)
-          );
-      `);
-    const debito_pendente = Number(debPendRs.recordset[0]?.debito_pendente ?? 0);
-
-    const [transpRs, docsRs] = await Promise.all([
-      pool
-        .request()
-        .input("id", +id)
-        .query(`
-        SELECT t.id, t.razao_social, t.cnpj, t.telefone, t.forma_envio, t.ativo
-        FROM cliente_transportadoras ct
-        JOIN transportadoras t ON t.id = ct.transportadora_id
-        WHERE ct.cliente_id = @id
-        ORDER BY t.razao_social
-      `),
-      pool
-        .request()
-        .input("id", +id)
-        .query(`
-        SELECT id, cliente_id, doc_tipo, doc_numero, principal, modelo_nota, nome, tipo_nota, percentual_nf
-        FROM cliente_documentos
+        SELECT COALESCE(SUM(valor_bruto - valor_baixado), 0) AS a_receber
+        FROM financeiro_titulos
         WHERE cliente_id = @id
-        ORDER BY principal DESC, id DESC
-      `),
-    ]);
+          AND status IN ('ABERTO','PARCIAL')
+      `);
+    const a_receber = Number(aReceberRs.recordset[0]?.a_receber ?? 0);
+
+    // se não houver bloco ABERTO, exibe o saldo do último FECHADO (carry-over)
+    let saldo_ultimo_fechado = 0;
+    if (saldo_aberto === 0) {
+      const lastClosed = await pool
+        .request()
+        .input("id", sql.Int, +id)
+        .query(`
+          SELECT TOP 1 b.id
+          FROM blocos b
+          WHERE b.cliente_id = @id AND b.status = 'FECHADO'
+          ORDER BY b.fechado_em DESC, b.id DESC
+        `);
+      if (lastClosed.recordset.length) {
+        const bid = Number(lastClosed.recordset[0].id);
+        const sRS = await pool
+          .request()
+          .input("bid", sql.Int, bid)
+          .query(`
+            SELECT
+              COALESCE(SUM(CASE WHEN sentido='SAIDA'   AND bom_para IS NULL THEN valor ELSE 0 END),0)
+            - COALESCE(SUM(CASE WHEN sentido='ENTRADA' AND bom_para IS NULL THEN valor ELSE 0 END),0) AS saldo
+            FROM bloco_lancamentos
+            WHERE bloco_id = @bid
+          `);
+        saldo_ultimo_fechado = Number(sRS.recordset[0]?.saldo ?? 0);
+      }
+    }
 
     const cliente = clienteRs.recordset[0];
-    const saldo_total = saldo_aberto + credito_pendente - debito_pendente;
+    const saldo_total = saldo_aberto !== 0 ? saldo_aberto : saldo_ultimo_fechado;
 
     return res.json({
       ...cliente,
       saldo_aberto,
-      credito_pendente,
-      debito_pendente, // novo
+      a_receber,
       saldo_total,
-      transportadoras: transpRs.recordset,
-      documentos: docsRs.recordset,
+      transportadoras: [],
+      documentos: [],
     });
   } catch (error) {
     console.error("Erro ao buscar cliente:", error);
@@ -266,7 +159,7 @@ export const getClienteById = async (req: Request, res: Response) => {
   }
 };
 
-/** GET /clientes/:id/saldo  -> { saldo, saldo_aberto, credito_pendente, debito_pendente } */
+/** GET /clientes/:id/saldo  -> { saldo, saldo_aberto, a_receber } */
 export const getClienteSaldo = async (req: Request, res: Response) => {
   const { id } = req.params;
 
@@ -277,9 +170,11 @@ export const getClienteSaldo = async (req: Request, res: Response) => {
       .query(`
         SELECT
           COALESCE(SUM(
-            CASE WHEN bl.sentido = 'SAIDA'   THEN bl.valor
-                WHEN bl.sentido = 'ENTRADA' THEN -bl.valor
-                ELSE 0 END
+            CASE
+              WHEN bl.bom_para IS NULL AND bl.sentido = 'SAIDA'   THEN bl.valor
+              WHEN bl.bom_para IS NULL AND bl.sentido = 'ENTRADA' THEN -bl.valor
+              ELSE 0
+            END
           ), 0) AS saldo_aberto
         FROM blocos b
         LEFT JOIN bloco_lancamentos bl ON bl.bloco_id = b.id
@@ -288,73 +183,50 @@ export const getClienteSaldo = async (req: Request, res: Response) => {
       `);
     const saldo_aberto = Number(abertoRs.recordset[0]?.saldo_aberto ?? 0);
 
-    // crédito pendente
-    const pendenteRs = await pool
+    const aReceberRs = await pool
       .request()
-      .input("entidade", sql.VarChar(50), "credito_cliente")
-      .input("entidade_id", sql.VarChar(50), String(id))
+      .input("id", +id)
       .query(`
-        ;WITH gerados AS (
-          SELECT l.id, TRY_CONVERT(decimal(18,2), JSON_VALUE(l.payload_json, '$.valor')) AS valor
-          FROM auditoria_logs l
-          WHERE l.entidade = @entidade
-            AND l.entidade_id = @entidade_id
-            AND l.acao = 'GERADO'
-        ),
-        consumidos AS (
-          SELECT JSON_VALUE(c.payload_json, '$.orig_log_id') AS orig_id_str
-          FROM auditoria_logs c
-          WHERE c.entidade = @entidade
-            AND c.entidade_id = @entidade_id
-            AND c.acao = 'CONSUMIDO'
-        )
-        SELECT COALESCE(SUM(g.valor), 0) AS credito_pendente
-        FROM gerados g
-        WHERE g.valor > 0
-          AND NOT EXISTS (
-            SELECT 1 FROM consumidos c
-            WHERE c.orig_id_str = CONVERT(varchar(20), g.id)
-          );
+        SELECT COALESCE(SUM(valor_bruto - valor_baixado), 0) AS a_receber
+        FROM financeiro_titulos
+        WHERE cliente_id = @id
+          AND status IN ('ABERTO','PARCIAL')
       `);
-    const credito_pendente = Number(pendenteRs.recordset[0]?.credito_pendente ?? 0);
+    const a_receber = Number(aReceberRs.recordset[0]?.a_receber ?? 0);
 
-    // débito pendente (NOVO)
-    const debPendRs = await pool
-      .request()
-      .input("entidade", sql.VarChar(50), "debito_cliente")
-      .input("entidade_id", sql.VarChar(50), String(id))
-      .query(`
-        ;WITH gerados AS (
-          SELECT l.id, TRY_CONVERT(decimal(18,2), JSON_VALUE(l.payload_json, '$.valor')) AS valor
-          FROM auditoria_logs l
-          WHERE l.entidade = @entidade
-            AND l.entidade_id = @entidade_id
-            AND l.acao = 'GERADO'
-        ),
-        consumidos AS (
-          SELECT JSON_VALUE(c.payload_json, '$.orig_log_id') AS orig_id_str
-          FROM auditoria_logs c
-          WHERE c.entidade = @entidade
-            AND c.entidade_id = @entidade_id
-            AND c.acao = 'CONSUMIDO'
-        )
-        SELECT COALESCE(SUM(g.valor), 0) AS debito_pendente
-        FROM gerados g
-        WHERE g.valor > 0
-          AND NOT EXISTS (
-            SELECT 1 FROM consumidos c
-            WHERE c.orig_id_str = CONVERT(varchar(20), g.id)
-          );
-      `);
-    const debito_pendente = Number(debPendRs.recordset[0]?.debito_pendente ?? 0);
+    let saldo_ultimo_fechado = 0;
+    if (saldo_aberto === 0) {
+      const lastClosed = await pool
+        .request()
+        .input("id", sql.Int, +id)
+        .query(`
+          SELECT TOP 1 b.id
+          FROM blocos b
+          WHERE b.cliente_id = @id AND b.status = 'FECHADO'
+          ORDER BY b.fechado_em DESC, b.id DESC
+        `);
+      if (lastClosed.recordset.length) {
+        const bid = Number(lastClosed.recordset[0].id);
+        const sRS = await pool
+          .request()
+          .input("bid", sql.Int, bid)
+          .query(`
+            SELECT
+              COALESCE(SUM(CASE WHEN sentido='SAIDA'   AND bom_para IS NULL THEN valor ELSE 0 END),0)
+            - COALESCE(SUM(CASE WHEN sentido='ENTRADA' AND bom_para IS NULL THEN valor ELSE 0 END),0) AS saldo
+            FROM bloco_lancamentos
+            WHERE bloco_id = @bid
+          `);
+        saldo_ultimo_fechado = Number(sRS.recordset[0]?.saldo ?? 0);
+      }
+    }
 
-    const saldo_total = saldo_aberto + credito_pendente - debito_pendente;
+    const saldo_total = saldo_aberto !== 0 ? saldo_aberto : saldo_ultimo_fechado;
 
     return res.json({
       saldo: saldo_total,
       saldo_aberto,
-      credito_pendente,
-      debito_pendente, // novo
+      a_receber,
     });
   } catch (error) {
     console.error("Erro em getClienteSaldo:", error);
@@ -362,7 +234,8 @@ export const getClienteSaldo = async (req: Request, res: Response) => {
   }
 };
 
-/* ========================= SCHEMAS ========================= */
+/* ========================= CREATE / UPDATE / DELETE ========================= */
+
 const clienteSchema = z.object({
   nome_fantasia: z.string().min(1, "Nome fantasia é obrigatório"),
   grupo_empresa: z.string().nullish(),
@@ -387,8 +260,6 @@ const linkSchema = z.object({
   descricao: z.string().min(1, "Descrição é obrigatória"),
   url: z.string().url("URL inválida"),
 });
-
-/* ========================= CREATE / UPDATE / DELETE ========================= */
 
 export const createCliente = async (req: Request, res: Response) => {
   try {
@@ -441,7 +312,18 @@ export const createCliente = async (req: Request, res: Response) => {
 export const updateCliente = async (req: Request, res: Response) => {
   const { id } = req.params;
   try {
-    const data = formaPagamentoUpdateSchema.parse(req.body as any); // mantido conforme seu padrão
+    const data = z
+      .object({
+        nome_fantasia: z.string().optional(),
+        grupo_empresa: z.string().nullish().optional(),
+        tabela_preco: z.string().optional(),
+        status: z.enum(["ATIVO", "INATIVO"]).optional(),
+        whatsapp: z.string().nullish().optional(),
+        anotacoes: z.string().nullish().optional(),
+        links_json: z.string().nullish().optional(),
+      })
+      .partial()
+      .parse(req.body as any);
 
     if ((data as any).nome_fantasia && (data as any).nome_fantasia.trim()) {
       const exists = await pool
@@ -465,9 +347,7 @@ export const updateCliente = async (req: Request, res: Response) => {
       }
     }
 
-    const fields = Object.keys(sanitized)
-      .map((k) => `${k} = @${k}`)
-      .join(", ");
+    const fields = Object.keys(sanitized).map((k) => `${k} = @${k}`).join(", ");
     if (!fields) return res.status(400).json({ message: "Nenhum campo para atualizar" });
 
     const request = pool.request().input("id", +id);
@@ -518,10 +398,15 @@ export const deleteCliente = async (req: Request, res: Response) => {
 };
 
 /* ========================= DOCUMENTOS / LINKS ========================= */
-// (restante do arquivo permanece como você enviou – sem alterações nos handlers de documentos/transportadoras)
 
-
-/* ========================= DOCUMENTOS / LINKS ========================= */
+function toDbNull<T>(v: T | undefined | null): T | null {
+  if (v === undefined || v === null) return null as any;
+  if (typeof v === "string") {
+    const s = v.trim();
+    return (s === "" ? null : (s as unknown as T));
+  }
+  return v as unknown as T;
+}
 
 export const listClienteDocumentos = async (req: Request, res: Response) => {
   const { cliente_id } = req.params;
@@ -562,7 +447,7 @@ export const listClienteDocumentos = async (req: Request, res: Response) => {
 export const createClienteDocumento = async (req: Request, res: Response) => {
   const { cliente_id } = req.params;
 
-  // Se payload bater com um link, trata como anexo/atalho
+  const linkSchema = z.object({ descricao: z.string().min(1), url: z.string().url() });
   const linkParse = linkSchema.safeParse(req.body);
   if (linkParse.success) {
     try {
@@ -576,10 +461,7 @@ export const createClienteDocumento = async (req: Request, res: Response) => {
       let links: Array<{ descricao: string; url: string }> = [];
       const raw = cli.recordset[0].links_json as string | null;
       if (raw) {
-        try {
-          const parsed = JSON.parse(raw);
-          if (Array.isArray(parsed)) links = parsed;
-        } catch {}
+        try { const parsed = JSON.parse(raw); if (Array.isArray(parsed)) links = parsed; } catch {}
       }
 
       links.unshift({ descricao: linkParse.data.descricao, url: linkParse.data.url });
@@ -599,7 +481,6 @@ export const createClienteDocumento = async (req: Request, res: Response) => {
     }
   }
 
-  // Documento fiscal
   try {
     const data = clienteDocumentoSchema.parse(req.body);
 
@@ -609,7 +490,6 @@ export const createClienteDocumento = async (req: Request, res: Response) => {
       .input("doc_tipo", data.doc_tipo)
       .input("doc_numero", data.doc_numero)
       .input("principal", data.principal ?? false)
-      // 👇 Campos NOT NULL tratados com string vazia se não vierem:
       .input("modelo_nota", data.modelo_nota ?? "")
       .input("nome", data.nome ?? "")
       .input("tipo_nota", data.tipo_nota ?? "")
@@ -641,24 +521,16 @@ export const updateClienteDocumento = async (req: Request, res: Response) => {
   try {
     const data = clienteDocumentoSchema.partial().parse(req.body);
 
-    // 👇 Sanitize: NOT NULL devem virar string vazia se enviados como null/undefined
     const sanitized: Record<string, any> = { ...data };
     if ("modelo_nota" in sanitized) sanitized.modelo_nota = (sanitized.modelo_nota ?? "") as string;
     if ("nome" in sanitized) sanitized.nome = (sanitized.nome ?? "") as string;
     if ("tipo_nota" in sanitized) sanitized.tipo_nota = (sanitized.tipo_nota ?? "") as string;
 
-    const fields = Object.keys(sanitized)
-      .map((key) => `${key} = @${key}`)
-      .join(", ");
-
-    if (!fields) {
-      return res.status(400).json({ message: "Nenhum campo para atualizar" });
-    }
+    const fields = Object.keys(sanitized).map((key) => `${key} = @${key}`).join(", ");
+    if (!fields) return res.status(400).json({ message: "Nenhum campo para atualizar" });
 
     const request = pool.request().input("id", +id).input("cliente_id", +cliente_id);
-    Object.entries(sanitized).forEach(([key, value]) => {
-      request.input(key, value as any);
-    });
+    Object.entries(sanitized).forEach(([key, value]) => request.input(key, value as any));
 
     const result = await request.query(`
       UPDATE cliente_documentos
@@ -708,9 +580,7 @@ export const deleteClienteDocumento = async (req: Request, res: Response) => {
 
 export const setClienteTransportadoras = async (req: Request, res: Response) => {
   const { id } = req.params;
-  const schema = z.object({
-    transportadoraIds: z.array(z.number().int().positive()).default([]),
-  });
+  const schema = z.object({ transportadoraIds: z.array(z.number().int().positive()).default([]) });
 
   try {
     const { transportadoraIds } = schema.parse(req.body);
@@ -728,12 +598,9 @@ export const setClienteTransportadoras = async (req: Request, res: Response) => 
 
       if (transportadoraIds.length) {
         const values = transportadoraIds.map((_, i) => `(@id, @t${i})`).join(", ");
-        const req = tx.request().input("id", +id);
-        transportadoraIds.forEach((tid, i) => req.input(`t${i}`, tid));
-        await req.query(`
-          INSERT INTO cliente_transportadoras (cliente_id, transportadora_id)
-          VALUES ${values}
-        `);
+        const reqDb = tx.request().input("id", +id);
+        transportadoraIds.forEach((tid, i) => reqDb.input(`t${i}`, tid));
+        await reqDb.query(`INSERT INTO cliente_transportadoras (cliente_id, transportadora_id) VALUES ${values}`);
       }
 
       await tx.commit();
@@ -763,7 +630,6 @@ export const setClienteTransportadoras = async (req: Request, res: Response) => 
   }
 };
 
-/* ==== 🔽 DEFAULT EXPORT 🔽 ==== */
 export default {
   getClientes,
   getClienteById,

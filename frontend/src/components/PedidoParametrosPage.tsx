@@ -7,6 +7,8 @@ type Param = {
   tipo: TipoParam;
   descricao: string;
   ativo: boolean;
+  exige_bom_para?: boolean;
+  exige_tipo_cheque?: boolean;
   created_at?: string;
 };
 
@@ -19,6 +21,8 @@ export default function PedidoParametrosPage() {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState("");
+  const [flagBomPara, setFlagBomPara] = useState(false);
+  const [flagTipoCheque, setFlagTipoCheque] = useState(false);
 
   const filtered = useMemo(() => {
     const q = filter.trim().toLowerCase();
@@ -64,8 +68,12 @@ export default function PedidoParametrosPage() {
       await api.post("/pedido-parametros", {
         tipo: tipoNovo,
         descricao: descricao.trim(),
+        exige_bom_para: flagBomPara,
+        exige_tipo_cheque: flagTipoCheque,
       });
       setDescricao("");
+      setFlagBomPara(false);
+      setFlagTipoCheque(false);
       await load();
     } catch (e: any) {
       const msg =
@@ -90,6 +98,19 @@ export default function PedidoParametrosPage() {
     }
   }
 
+  async function handleDelete(p: Param) {
+    const ok = confirm(
+      `Excluir o parâmetro "${p.descricao}" (${p.tipo})?\n\nEsta ação é irreversível.`
+    );
+    if (!ok) return;
+    try {
+      await api.delete(`/pedido-parametros/${p.id}`);
+      await load();
+    } catch (e: any) {
+      alert(e?.response?.data?.message || "Não foi possível excluir o parâmetro.");
+    }
+  }
+
   function onKeyDown(e: React.KeyboardEvent<HTMLInputElement>) {
     if (e.key === "Enter" && descricao.trim() && !saving) save();
   }
@@ -102,9 +123,17 @@ export default function PedidoParametrosPage() {
         : "bg-rose-50 text-rose-700 border-rose-200",
     ].join(" ");
 
+  const pill = (yes: boolean) =>
+    [
+      "inline-flex items-center justify-center rounded-full px-2.5 py-0.5 text-xs font-semibold border",
+      yes
+        ? "bg-indigo-50 text-indigo-700 border-indigo-200"
+        : "bg-slate-100 text-slate-600 border-slate-200",
+    ].join(" ");
+
   return (
     <div className="space-y-5">
-      {/* header coloridinho */}
+      {/* header */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex items-center gap-3">
           <div className="h-9 w-9 rounded-xl bg-gradient-to-br from-indigo-500 to-violet-600 text-white grid place-items-center shadow-sm">
@@ -174,7 +203,7 @@ export default function PedidoParametrosPage() {
               {error}
             </div>
           )}
-          <div className="flex flex-wrap items-end gap-2">
+          <div className="flex flex-wrap items-end gap-3">
             <select
               className="border border-slate-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500/40"
               value={tipoNovo}
@@ -194,6 +223,16 @@ export default function PedidoParametrosPage() {
               disabled={saving}
             />
 
+            <label className="flex items-center gap-2 text-sm text-slate-700">
+              <input type="checkbox" checked={flagBomPara} onChange={(e) => setFlagBomPara(e.target.checked)} />
+              Exige “bom/para”
+            </label>
+
+            <label className="flex items-center gap-2 text-sm text-slate-700">
+              <input type="checkbox" checked={flagTipoCheque} onChange={(e) => setFlagTipoCheque(e.target.checked)} />
+              Exige tipo de cheque
+            </label>
+
             <button
               onClick={save}
               className="px-4 py-2.5 rounded-xl text-sm font-semibold bg-indigo-600 text-white hover:bg-indigo-700 disabled:opacity-50 shadow-sm"
@@ -212,14 +251,16 @@ export default function PedidoParametrosPage() {
             <tr className="text-slate-600">
               <th className="p-2.5 border w-28">Tipo</th>
               <th className="p-2.5 border text-left">Descrição</th>
-              <th className="p-2.5 border w-24">Ativo</th>
-              <th className="p-2.5 border w-40">Ações</th>
+              <th className="p-2.5 border w-28">Bom/para</th>
+              <th className="p-2.5 border w-32">Tipo Cheque</th>
+              <th className="p-2.5 border w-20">Ativo</th>
+              <th className="p-2.5 border w-56">Ações</th>
             </tr>
           </thead>
           <tbody>
             {loading && (
               <tr>
-                <td colSpan={5} className="p-6 text-center text-slate-500">
+                <td colSpan={6} className="p-6 text-center text-slate-500">
                   Carregando…
                 </td>
               </tr>
@@ -233,6 +274,12 @@ export default function PedidoParametrosPage() {
                   </td>
                   <td className="p-2.5 border">{p.descricao}</td>
                   <td className="p-2.5 border text-center">
+                    <span className={pill(!!p.exige_bom_para)}>{p.exige_bom_para ? "Sim" : "Não"}</span>
+                  </td>
+                  <td className="p-2.5 border text-center">
+                    <span className={pill(!!p.exige_tipo_cheque)}>{p.exige_tipo_cheque ? "Sim" : "Não"}</span>
+                  </td>
+                  <td className="p-2.5 border text-center">
                     <span
                       className={[
                         "inline-flex items-center justify-center rounded-full px-2.5 py-0.5 text-xs font-semibold border",
@@ -245,7 +292,7 @@ export default function PedidoParametrosPage() {
                     </span>
                   </td>
                   <td className="p-2.5 border">
-                    <div className="flex justify-center">
+                    <div className="flex justify-center gap-2">
                       <button
                         onClick={() => toggleAtivo(p)}
                         className={[
@@ -258,6 +305,14 @@ export default function PedidoParametrosPage() {
                       >
                         {p.ativo ? "Desativar" : "Ativar"}
                       </button>
+
+                      <button
+                        onClick={() => handleDelete(p)}
+                        className="px-3 py-1.5 rounded-xl text-sm font-medium border shadow-sm transition-colors bg-rose-600 text-white border-rose-600 hover:bg-rose-700"
+                        title="Excluir definitivamente"
+                      >
+                        Excluir
+                      </button>
                     </div>
                   </td>
                 </tr>
@@ -265,7 +320,7 @@ export default function PedidoParametrosPage() {
 
             {!loading && filtered.length === 0 && (
               <tr>
-                <td colSpan={5} className="p-8 text-center text-slate-500">
+                <td colSpan={6} className="p-8 text-center text-slate-500">
                   {rows.length === 0 ? "Sem parâmetros cadastrados" : "Nenhum resultado para o filtro"}
                 </td>
               </tr>

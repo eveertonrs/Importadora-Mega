@@ -16,9 +16,11 @@ type Sentido = "ENTRADA" | "SAIDA";
 
 type ParametroItem = {
   id: number;
-  descricao: string;
+  descricao: string;               // ex.: CHEQUE, PIX, BOLETO...
   tipo: "ENTRADA" | "SAIDA";
   ativo: boolean;
+  exige_bom_para: boolean;         // se true, pede o campo "bom para"
+  exige_tipo_cheque: boolean;      // se true, pede "tipo de cheque"
 };
 
 export default function BlocoDetalhe() {
@@ -29,8 +31,8 @@ export default function BlocoDetalhe() {
   const [b, setB] = useState<DetBloco | null>(null);
 
   // Saldos
-  const [saldo, setSaldo] = useState<number>(0);          // saldo “normal”
-  const [aReceber, setAReceber] = useState<number>(0);    // novo: títulos abertos/ parciais do bloco
+  const [saldo, setSaldo] = useState<number>(0);       // saldo “normal”
+  const [aReceber, setAReceber] = useState<number>(0); // títulos ABERTO/PARCIAL do bloco
 
   const [tab, setTab] = useState<"lancamentos" | "resumo">("lancamentos");
 
@@ -55,6 +57,12 @@ export default function BlocoDetalhe() {
   /** ▼▼ Parâmetros do pedido (dinâmicos) ▼▼ **/
   const [parametros, setParametros] = useState<ParametroItem[]>([]);
   const [paramSelecionadoId, setParamSelecionadoId] = useState<number | "">("");
+  const paramSelecionado = useMemo(
+    () => parametros.find((x) => x.id === paramSelecionadoId),
+    [parametros, paramSelecionadoId]
+  );
+  const requerBomPara = !!paramSelecionado?.exige_bom_para;
+  const requerTipoCheque = !!paramSelecionado?.exige_tipo_cheque;
   /** ▲▲ Parâmetros do pedido ▲▲ **/
 
   // campos do novo lançamento
@@ -64,18 +72,14 @@ export default function BlocoDetalhe() {
   const [obs, setObs] = useState("");
   const [savingLanc, setSavingLanc] = useState(false);
 
-  // cheque (regras especiais)
-  const isCheque = useMemo(() => {
-    const p = parametros.find((x) => x.id === paramSelecionadoId);
-    return (p?.descricao || "").toUpperCase() === "CHEQUE";
-  }, [parametros, paramSelecionadoId]);
+  // campos condicionais
   const [tipoCheque, setTipoCheque] = useState<"" | "PROPRIO" | "TERCEIRO">("");
   const [bomPara, setBomPara] = useState<string>("");
 
   const podeFechar = useMemo(() => b?.status === "ABERTO", [b?.status]);
   const podeEditar = podeFechar;
 
-  // ---------- helpers
+  // helpers de moeda
   function formatarMoedaBRL(input: string) {
     const onlyDigits = input.replace(/\D/g, "");
     if (!onlyDigits) return "";
@@ -86,13 +90,14 @@ export default function BlocoDetalhe() {
     return Number(brl.replace(/\./g, "").replace(",", "."));
   }
 
-  // ---------- loaders
+  // loaders
   async function load() {
     const [det, s] = await Promise.all([getBloco(blocoId), getSaldos(blocoId)]);
     setB(det);
     setSaldo(Number(s?.saldo ?? 0));
     setAReceber(Number(s?.a_receber ?? 0));
   }
+
   async function loadLancs() {
     const r = await listarLancamentos(blocoId, {
       page: lPage,
@@ -117,13 +122,16 @@ export default function BlocoDetalhe() {
   useEffect(() => {
     if (!Number.isFinite(blocoId)) return;
     load();
-  }, [id]); // eslint-disable-line
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id]);
+
   useEffect(() => {
     if (!Number.isFinite(blocoId)) return;
     loadLancs();
-  }, [lPage, lLimit, fStatus, fTipo]); // eslint-disable-line
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [lPage, lLimit, fStatus, fTipo]);
 
-  // carrega PARÂMETROS
+  // carrega PARÂMETROS ativos
   useEffect(() => {
     (async () => {
       try {
@@ -132,11 +140,13 @@ export default function BlocoDetalhe() {
           id: Number(r.id),
           descricao: String(r.descricao ?? r.nome ?? r.chave ?? "").toUpperCase().trim(),
           tipo: String(r.tipo ?? "ENTRADA").toUpperCase() === "SAIDA" ? "SAIDA" : "ENTRADA",
-          ativo: r.ativo ?? true,
+          ativo: !!r.ativo,
+          exige_bom_para: !!r.exige_bom_para,
+          exige_tipo_cheque: !!r.exige_tipo_cheque,
         }));
         const ativos = rows.filter((x) => x.ativo);
         setParametros(ativos);
-        setParamSelecionadoId(ativos[0]?.id ?? "");
+        setParamSelecionadoId((prev) => (prev === "" && ativos[0]?.id ? ativos[0].id : prev));
       } catch {
         setParametros([]);
         setParamSelecionadoId("");
@@ -144,51 +154,41 @@ export default function BlocoDetalhe() {
     })();
   }, []);
 
-  // ---------- ações
+  // ações
   async function doAddLanc() {
-    if (paramSelecionadoId === "") {
-      alert("Selecione o tipo do lançamento.");
-      return;
-    }
-    if (!valor.trim()) {
-      alert("Informe o valor.");
-      return;
-    }
+    if (paramSelecionadoId === "") return alert("Selecione o tipo do lançamento.");
+    if (!valor.trim()) return alert("Informe o valor.");
+
     const param = parametros.find((p) => p.id === paramSelecionadoId);
-    if (!param) {
-      alert("Parâmetro inválido.");
-      return;
-    }
-    if (param.descricao === "CHEQUE") {
-      if (!tipoCheque) return alert("Para CHEQUE, selecione o tipo (PRÓPRIO/TERCEIRO).");
-      if (!bomPara) return alert("Para CHEQUE, informe o 'Bom para'.");
-    }
+    if (!param) return alert("Parâmetro inválido.");
+
+    // validações conforme flags do parâmetro
+    if (requerTipoCheque && !tipoCheque) return alert("Selecione o tipo de cheque (PRÓPRIO/TERCEIRO).");
+    if (requerBomPara && !bomPara) return alert("Informe a data 'Bom para'.");
 
     setSavingLanc(true);
     try {
       const payload: any = {
-        tipo_recebimento: param.descricao,
-        sentido: param.tipo as Sentido,
+        tipo_recebimento: param.descricao,       // descrição do parâmetro
+        sentido: param.tipo as Sentido,          // ENTADA/SAIDA do parâmetro
         valor: toNumber(valor),
         data_lancamento: dataLanc,
         numero_referencia: numRef || undefined,
         observacao: obs || undefined,
       };
-      // Se for CHEQUE (ou outro com bom/para), manda bom_para (vira Título no financeiro)
-      if (param.descricao === "CHEQUE" && bomPara) {
-        payload.tipo_cheque = tipoCheque;
-        payload.bom_para = bomPara;
-      }
-      // Dica: se você quiser permitir BOLETO/PIX com bom_para, basta o usuário preencher a data 'bomPara' (aqui mantive só cheque como obrigatório)
+
+      if (requerTipoCheque) payload.tipo_cheque = tipoCheque;
+      if (requerBomPara)     payload.bom_para   = bomPara;
 
       await adicionarLancamento(blocoId, payload);
+
+      // limpa campos
       setValor("");
       setNumRef("");
       setObs("");
-      if (param.descricao === "CHEQUE") {
-        setBomPara("");
-        setTipoCheque("");
-      }
+      setBomPara("");
+      setTipoCheque("");
+
       await loadLancs();
     } catch (e: any) {
       alert(e?.response?.data?.message || "Falha ao adicionar lançamento.");
@@ -206,7 +206,7 @@ export default function BlocoDetalhe() {
       if (!ok) return;
     } else if (saldo < 0) {
       const ok = confirm(
-        `Fechar com saldo NEGATIVO de ${saldo.toLocaleString("pt-BR",{style:"currency",currency:"BRL"})}?\n\nVocê confirmou que pode fechar mesmo com saldo devedor.`
+        `Fechar com saldo NEGATIVO de ${saldo.toLocaleString("pt-BR",{style:"currency","currency":"BRL"})}?\n\nVocê confirmou que pode fechar mesmo com saldo devedor.`
       );
       if (!ok) return;
     }
@@ -220,7 +220,11 @@ export default function BlocoDetalhe() {
   }
 
   const saldoTone =
-    saldo < 0 ? "from-red-50 to-rose-50 text-red-700" : saldo > 0 ? "from-emerald-50 to-teal-50 text-emerald-700" : "from-slate-50 to-slate-50 text-slate-800";
+    saldo < 0
+      ? "from-red-50 to-rose-50 text-red-700"
+      : saldo > 0
+      ? "from-emerald-50 to-teal-50 text-emerald-700"
+      : "from-slate-50 to-slate-50 text-slate-800";
 
   return (
     <div className="space-y-5">
@@ -266,7 +270,7 @@ export default function BlocoDetalhe() {
         ))}
       </div>
 
-      {/* Saldos (novo layout com 2 cartões) */}
+      {/* Saldos */}
       <div className="grid sm:grid-cols-2 gap-3">
         <div className={`rounded-2xl border bg-gradient-to-r ${saldoTone} p-4`}>
           <div className="text-xs opacity-70">Saldo</div>
@@ -274,7 +278,7 @@ export default function BlocoDetalhe() {
             {saldo.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}
           </div>
           <div className="text-[11px] opacity-70 mt-1">
-            Considere apenas lançamentos imediatos (ignora CHEQUE/BOLETO com “bom para”).
+            Considere apenas lançamentos imediatos (ignora lançamentos com “bom para”).
           </div>
         </div>
 
@@ -351,6 +355,7 @@ export default function BlocoDetalhe() {
                   ))}
                 </select>
               </div>
+
               <div>
                 <label className="text-sm text-slate-700">Valor</label>
                 <input
@@ -361,6 +366,7 @@ export default function BlocoDetalhe() {
                   disabled={!podeEditar}
                 />
               </div>
+
               <div>
                 <label className="text-sm text-slate-700">Data</label>
                 <input
@@ -372,33 +378,34 @@ export default function BlocoDetalhe() {
                 />
               </div>
 
-              {/* Campos específicos para CHEQUE (bom/para) */}
-              {isCheque && (
-                <>
-                  <div>
-                    <label className="text-sm text-slate-700">Tipo de cheque</label>
-                    <select
-                      className="mt-1 border rounded-xl px-3 py-2 w-full"
-                      value={tipoCheque}
-                      onChange={(e) => setTipoCheque((e.target.value as "PROPRIO" | "TERCEIRO") || "")}
-                      disabled={!podeEditar}
-                    >
-                      <option value="">(selecione)</option>
-                      <option value="PROPRIO">PRÓPRIO</option>
-                      <option value="TERCEIRO">TERCEIRO</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label className="text-sm text-slate-700">Bom para</label>
-                    <input
-                      type="date"
-                      className="mt-1 border rounded-xl px-3 py-2 w-full"
-                      value={bomPara}
-                      onChange={(e) => setBomPara(e.target.value)}
-                      disabled={!podeEditar}
-                    />
-                  </div>
-                </>
+              {/* Campos condicionais de acordo com o parâmetro */}
+              {requerTipoCheque && (
+                <div>
+                  <label className="text-sm text-slate-700">Tipo de cheque</label>
+                  <select
+                    className="mt-1 border rounded-xl px-3 py-2 w-full"
+                    value={tipoCheque}
+                    onChange={(e) => setTipoCheque((e.target.value as "PROPRIO" | "TERCEIRO") || "")}
+                    disabled={!podeEditar}
+                  >
+                    <option value="">(selecione)</option>
+                    <option value="PROPRIO">PRÓPRIO</option>
+                    <option value="TERCEIRO">TERCEIRO</option>
+                  </select>
+                </div>
+              )}
+
+              {requerBomPara && (
+                <div>
+                  <label className="text-sm text-slate-700">Bom para</label>
+                  <input
+                    type="date"
+                    className="mt-1 border rounded-xl px-3 py-2 w-full"
+                    value={bomPara}
+                    onChange={(e) => setBomPara(e.target.value)}
+                    disabled={!podeEditar}
+                  />
+                </div>
               )}
 
               <div className="md:col-span-2">
@@ -411,6 +418,7 @@ export default function BlocoDetalhe() {
                   disabled={!podeEditar}
                 />
               </div>
+
               <div className="md:col-span-4">
                 <label className="text-sm text-slate-700">Observação</label>
                 <input
@@ -420,6 +428,7 @@ export default function BlocoDetalhe() {
                   disabled={!podeEditar}
                 />
               </div>
+
               <div className="md:col-span-6">
                 <button
                   onClick={doAddLanc}

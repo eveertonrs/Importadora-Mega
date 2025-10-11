@@ -66,9 +66,9 @@ const Layout: React.FC<{ children: ReactNode }> = ({ children }) => {
     { to: "/transportadoras", label: "Transportadoras" },
     // { to: "/dominios", label: "Domínios" },
     // { to: "/pagamentos", label: "Pagamentos" },
-    { to: "/historico-pagamentos", label: "Histórico" },
     { to: "/financeiro/receber", label: "Financeiro" },
     { to: "/financeiro/conferencia", label: "Conferência" },
+    { to: "/historico-pagamentos", label: "Histórico" },
   ];
 
   return (

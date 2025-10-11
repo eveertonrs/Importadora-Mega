@@ -5,7 +5,7 @@ import {
   addPedidoToBloco,
   addLancamentoToBloco,
   getBlocoSaldo,
-  getBlocoSaldos, // << novo: saldo + a receber
+  getBlocoSaldos,
   fecharBloco,
   unlinkPedido,
   listBlocos,
@@ -16,27 +16,29 @@ import {
 
 const router = Router();
 
+// protege tudo deste módulo
 router.use(protect);
 
+// -------- Blocos (lista / criação / detalhe) --------
 router.get("/", authorize("admin", "financeiro", "vendedor"), listBlocos);
 router.post("/", authorize("admin", "financeiro"), createBloco);
 
 router.get("/:id", authorize("admin", "financeiro", "vendedor"), getBlocoById);
 
-// Saldo antigo (mantido para compatibilidade)
+// -------- Saldos --------
 router.get("/:id/saldo", authorize("admin", "financeiro", "vendedor"), getBlocoSaldo);
-
-// Novo: retorna { saldo, a_receber }
 router.get("/:id/saldos", authorize("admin", "financeiro", "vendedor"), getBlocoSaldos);
 
+// -------- Fechamento --------
 router.post("/:id/fechar", authorize("admin", "financeiro"), fecharBloco);
 
+// -------- Pedidos do bloco --------
+router.get("/:id/pedidos", authorize("admin", "financeiro", "vendedor"), listPedidosDoBloco);
 router.post("/:id/pedidos", authorize("admin", "financeiro", "vendedor"), addPedidoToBloco);
 router.delete("/:id/pedidos/:pedido_id", authorize("admin", "financeiro"), unlinkPedido);
 
+// -------- Lançamentos do bloco --------
 router.get("/:id/lancamentos", authorize("admin", "financeiro", "vendedor"), listLancamentosDoBloco);
 router.post("/:id/lancamentos", authorize("admin", "financeiro"), addLancamentoToBloco);
-
-router.get("/:id/pedidos", authorize("admin", "financeiro", "vendedor"), listPedidosDoBloco);
 
 export default router;

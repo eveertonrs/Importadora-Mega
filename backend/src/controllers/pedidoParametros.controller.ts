@@ -17,12 +17,14 @@ export async function list(req: Request, res: Response) {
     r.input("ativo", sql.Bit, String(ativo) === "true");
   }
   if (q) {
-    where.push("descricao LIKE @q");
+    where.push("(descricao LIKE @q)");
     r.input("q", sql.VarChar, `%${String(q)}%`);
   }
 
   const query = `
-    SELECT id, tipo, descricao, ativo, created_at
+    SELECT id, tipo, descricao, ativo, created_at,
+           ISNULL(exige_bom_para, 0)     AS exige_bom_para,
+           ISNULL(exige_tipo_cheque, 0)  AS exige_tipo_cheque
     FROM dbo.pedido_parametros
     ${where.length ? "WHERE " + where.join(" AND ") : ""}
     ORDER BY tipo, descricao
@@ -32,31 +34,33 @@ export async function list(req: Request, res: Response) {
   res.json(recordset);
 }
 
-/** POST /pedido-parametros { tipo, descricao } */
+/** POST /pedido-parametros { tipo, descricao, exige_bom_para?, exige_tipo_cheque? } */
 export async function create(req: Request, res: Response) {
-  const { tipo, descricao } = req.body || {};
+  const { tipo, descricao, exige_bom_para, exige_tipo_cheque } = req.body || {};
   if (!tipo || !descricao) {
     return res.status(400).json({ message: "tipo e descricao são obrigatórios." });
   }
 
   const r = new sql.Request(pool)
     .input("tipo", sql.VarChar(10), String(tipo).toUpperCase())
-    .input("descricao", sql.VarChar(200), String(descricao).trim());
+    .input("descricao", sql.VarChar(200), String(descricao).trim())
+    .input("exige_bom_para", sql.Bit, !!exige_bom_para)
+    .input("exige_tipo_cheque", sql.Bit, !!exige_tipo_cheque);
 
   const query = `
-    INSERT INTO dbo.pedido_parametros (tipo, descricao)
+    INSERT INTO dbo.pedido_parametros (tipo, descricao, exige_bom_para, exige_tipo_cheque)
     OUTPUT INSERTED.*
-    VALUES (@tipo, @descricao)
+    VALUES (@tipo, @descricao, @exige_bom_para, @exige_tipo_cheque)
   `;
 
   const { recordset } = await r.query(query);
   res.status(201).json(recordset[0]);
 }
 
-/** PUT /pedido-parametros/:id { descricao?, ativo?, tipo? } */
+/** PATCH /pedido-parametros/:id { descricao?, ativo?, tipo?, exige_bom_para?, exige_tipo_cheque? } */
 export async function update(req: Request, res: Response) {
   const id = Number(req.params.id);
-  const { descricao, ativo, tipo } = req.body || {};
+  const { descricao, ativo, tipo, exige_bom_para, exige_tipo_cheque } = req.body || {};
   if (!id) return res.status(400).json({ message: "id inválido" });
 
   const sets: string[] = [];
@@ -74,6 +78,14 @@ export async function update(req: Request, res: Response) {
     sets.push("tipo = @tipo");
     r.input("tipo", sql.VarChar(10), String(tipo).toUpperCase());
   }
+  if (exige_bom_para !== undefined) {
+    sets.push("exige_bom_para = @exige_bom_para");
+    r.input("exige_bom_para", sql.Bit, !!exige_bom_para);
+  }
+  if (exige_tipo_cheque !== undefined) {
+    sets.push("exige_tipo_cheque = @exige_tipo_cheque");
+    r.input("exige_tipo_cheque", sql.Bit, !!exige_tipo_cheque);
+  }
 
   if (!sets.length) return res.status(400).json({ message: "Nada para atualizar." });
 
@@ -88,7 +100,7 @@ export async function update(req: Request, res: Response) {
   res.json(recordset[0]);
 }
 
-/** DELETE /pedido-parametros/:id  → alterna ativo/inativo */
+/** PATCH /pedido-parametros/:id/toggle  → alterna ativo/inativo */
 export async function toggle(req: Request, res: Response) {
   const id = Number(req.params.id);
   if (!id) return res.status(400).json({ message: "id inválido" });
@@ -103,4 +115,23 @@ export async function toggle(req: Request, res: Response) {
 
   const { recordset } = await r.query(query);
   res.json(recordset[0]);
+}
+
+/** DELETE /pedido-parametros/:id  → exclusão definitiva */
+export async function remove(req: Request, res: Response) {
+  const id = Number(req.params.id);
+  if (!id) return res.status(400).json({ message: "id inválido" });
+
+  const r = new sql.Request(pool).input("id", sql.Int, id);
+
+  // opcional: verificação de existência
+  const chk = await r.query("SELECT TOP 1 id FROM dbo.pedido_parametros WHERE id = @id");
+  if (chk.recordset.length === 0) return res.status(404).json({ message: "Parâmetro não encontrado" });
+
+  const del = await r.query("DELETE FROM dbo.pedido_parametros WHERE id = @id");
+  if ((del.rowsAffected?.[0] ?? 0) === 0) {
+    return res.status(500).json({ message: "Não foi possível excluir o parâmetro" });
+  }
+
+  return res.status(204).send();
 }

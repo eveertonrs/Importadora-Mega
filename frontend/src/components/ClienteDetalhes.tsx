@@ -55,7 +55,9 @@ export default function ClienteDetalhes() {
   const [cli, setCli] = useState<Cliente | null>(null);
   const [loading, setLoading] = useState(true);
 
-  const [saldo, setSaldo] = useState<number | null>(null);
+  // saldos
+  const [saldo, setSaldo] = useState<number>(0);          // saldo total (imediato + créditos - débitos)
+  const [aReceber, setAReceber] = useState<number>(0);    // títulos ABERTO/PARCIAL do cliente
   const [saldoLoading, setSaldoLoading] = useState(false);
 
   const [docs, setDocs] = useState<Doc[]>([]);
@@ -73,7 +75,7 @@ export default function ClienteDetalhes() {
   const [selPrincipal, setSelPrincipal] = useState(true);
   const [assocSaving, setAssocSaving] = useState(false);
 
-  // carrega cliente
+  // carrega cliente (dados básicos)
   useEffect(() => {
     let cancel = false;
     (async () => {
@@ -95,6 +97,9 @@ export default function ClienteDetalhes() {
           status,
           ativo: status === "ATIVO",
         });
+
+        // se o endpoint já devolver a_receber no GET /clientes/:id, hidrata aqui também
+        if (typeof raw?.a_receber === "number") setAReceber(Number(raw.a_receber || 0));
       } finally {
         if (!cancel) setLoading(false);
       }
@@ -102,7 +107,7 @@ export default function ClienteDetalhes() {
     return () => { cancel = true; };
   }, [id]);
 
-  // saldo
+  // saldos (saldo + a_receber) — usa /clientes/:id/saldo
   useEffect(() => {
     if (!id) return;
     let cancel = false;
@@ -111,10 +116,13 @@ export default function ClienteDetalhes() {
         setSaldoLoading(true);
         const { data } = await api.get(`/clientes/${id}/saldo`, { headers: { "x-silent": "1" } });
         if (cancel) return;
-        const v = Number(data?.saldo ?? data ?? 0);
-        setSaldo(Number.isFinite(v) ? v : 0);
+        setSaldo(Number(data?.saldo ?? 0));
+        setAReceber(Number(data?.a_receber ?? 0));
       } catch {
-        if (!cancel) setSaldo(0);
+        if (!cancel) {
+          setSaldo(0);
+          setAReceber(0);
+        }
       } finally {
         if (!cancel) setSaldoLoading(false);
       }
@@ -177,7 +185,6 @@ export default function ClienteDetalhes() {
   const isAtivo = cli?.status === "ATIVO" || cli?.ativo;
 
   const saldoTone = useMemo(() => {
-    if (saldo === null) return "from-slate-100 to-slate-50 ring-slate-200 text-slate-700";
     if ((saldo ?? 0) > 0) return "from-emerald-50 to-emerald-100 ring-emerald-200 text-emerald-800";
     if ((saldo ?? 0) < 0) return "from-rose-50 to-rose-100 ring-rose-200 text-rose-800";
     return "from-slate-50 to-white ring-slate-200 text-slate-700";
@@ -234,16 +241,30 @@ export default function ClienteDetalhes() {
           </div>
         </div>
 
-        {/* SALDO à direita */}
-        <div
-          className={`ml-auto inline-flex items-center gap-3 rounded-2xl bg-gradient-to-br px-4 py-3 ring-1 ${saldoTone} shadow-sm`}
-          title="Saldo acumulado do cliente (positivo = crédito; negativo = débito)"
-        >
-          <div className="flex flex-col">
-            <span className="text-xs/4 text-slate-600">Saldo do cliente</span>
-            <span className="text-2xl font-bold tracking-tight">
-              {saldoLoading ? "calculando…" : formatBRL(saldo ?? 0)}
-            </span>
+        {/* Cartões de saldo (2) */}
+        <div className="ml-auto grid grid-cols-2 gap-3">
+          <div
+            className={`inline-flex items-center gap-3 rounded-2xl bg-gradient-to-br px-4 py-3 ring-1 ${saldoTone} shadow-sm`}
+            title="Saldo acumulado (positivo = crédito; negativo = débito)"
+          >
+            <div className="flex flex-col">
+              <span className="text-xs/4 text-slate-600">Saldo</span>
+              <span className="text-2xl font-bold tracking-tight">
+                {saldoLoading ? "calculando…" : formatBRL(saldo)}
+              </span>
+            </div>
+          </div>
+
+          <div
+            className="inline-flex items-center gap-3 rounded-2xl bg-gradient-to-br from-amber-50 to-yellow-50 ring-1 ring-amber-200 text-amber-900 px-4 py-3 shadow-sm"
+            title="Títulos do cliente em ABERTO/PARCIAL"
+          >
+            <div className="flex flex-col">
+              <span className="text-xs/4">A receber</span>
+              <span className="text-2xl font-bold tracking-tight">
+                {saldoLoading ? "…" : formatBRL(aReceber)}
+              </span>
+            </div>
           </div>
         </div>
       </div>
