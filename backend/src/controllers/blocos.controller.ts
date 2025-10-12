@@ -582,7 +582,7 @@ export const getBlocoById = async (req: Request, res: Response) => {
 const listLancQuerySchema = z.object({
   page: z.coerce.number().int().positive().default(1),
   limit: z.coerce.number().int().positive().max(200).default(50),
-  status: LancStatusEnum.optional(),
+  status: z.enum(["PENDENTE","LIQUIDADO","DEVOLVIDO","CANCELADO","BAIXADO NO FINANCEIRO"]).optional(),
   tipo: z.string().optional(),
 });
 
@@ -592,13 +592,17 @@ export const listLancamentosDoBloco = async (req: Request, res: Response) => {
     const { page, limit, status, tipo } = listLancQuerySchema.parse(req.query);
     const offset = (page - 1) * limit;
 
-    const where: string[] = ["bloco_id = @bloco_id"];
+    const where: string[] = ["l.bloco_id = @bloco_id"];
     const reqDb = pool.request().input("bloco_id", bloco_id);
-    if (status) { where.push("status = @status"); reqDb.input("status", status); }
-    if (tipo)   { where.push("tipo_recebimento = @tipo"); reqDb.input("tipo", tipo.toUpperCase()); }
+    if (status) { where.push("l.status = @status"); reqDb.input("status", status); }
+    if (tipo)   { where.push("l.tipo_recebimento = @tipo"); reqDb.input("tipo", tipo.toUpperCase()); }
     const whereSql = `WHERE ${where.join(" AND ")}`;
 
-    const totalRs = await reqDb.query(`SELECT COUNT(*) AS total FROM bloco_lancamentos ${whereSql}`);
+    const totalRs = await reqDb.query(`
+      SELECT COUNT(*) AS total
+      FROM bloco_lancamentos l
+      ${whereSql}
+    `);
     const total = Number(totalRs.recordset[0]?.total ?? 0);
 
     const pageReq = pool
@@ -608,20 +612,71 @@ export const listLancamentosDoBloco = async (req: Request, res: Response) => {
     if (tipo) pageReq.input("tipo", tipo.toUpperCase());
 
     const rs = await pageReq.query(`
-      SELECT
-        id, bloco_id, tipo_recebimento, sentido, valor,
-        data_lancamento, bom_para, tipo_cheque, numero_referencia,
-        status, observacao, criado_por, criado_em,
-        referencia_pedido_id, referencia_lancamento_id
-      FROM bloco_lancamentos
-      ${whereSql}
-      ORDER BY id DESC
-      OFFSET @offset ROWS FETCH NEXT @limit ROWS ONLY
-    `);
+    SELECT
+      l.id, l.bloco_id, l.tipo_recebimento, l.sentido, l.valor,
+      l.data_lancamento, l.bom_para, l.tipo_cheque, l.numero_referencia,
+      l.status, l.observacao, l.criado_por, l.criado_em,
+      l.referencia_pedido_id, l.referencia_lancamento_id,
+      u.nome AS criado_por_nome
+    FROM bloco_lancamentos l
+    LEFT JOIN dbo.usuarios u ON u.id = l.criado_por
+    ${whereSql}
+    ORDER BY l.id DESC
+    OFFSET @offset ROWS FETCH NEXT @limit ROWS ONLY
+  `);
 
     return res.json({ data: rs.recordset, page, limit, total });
   } catch (err) {
     console.error("Erro em listLancamentosDoBloco:", err);
+    return res.status(500).json({ message: "Erro interno no servidor" });
+  }
+};
+
+/* === Excluir lançamento do bloco (seguro) ===
+   - Só permite se o BLOCO estiver ABERTO.
+   - Se o lançamento tiver 'bom_para' (geraria/gerou Título "a receber"), bloqueia a exclusão. */
+export const deleteLancamento = async (req: Request, res: Response) => {
+  const bloco_id = +req.params.id;
+  const lanc_id = +req.params.lanc_id;
+
+  if (!Number.isFinite(bloco_id) || !Number.isFinite(lanc_id)) {
+    return res.status(400).json({ message: "Parâmetros inválidos" });
+  }
+
+  try {
+    const blocoRS = await pool.request().input("id", sql.Int, bloco_id)
+      .query(`SELECT id, status FROM blocos WHERE id = @id`);
+    if (!blocoRS.recordset.length) return res.status(404).json({ message: "Bloco não encontrado" });
+    if (String(blocoRS.recordset[0].status) !== "ABERTO") {
+      return res.status(400).json({ message: "Não é possível excluir lançamento de bloco FECHADO" });
+    }
+
+    const lancRS = await pool.request()
+      .input("id", sql.Int, lanc_id)
+      .input("bloco_id", sql.Int, bloco_id)
+      .query(`
+        SELECT id, bloco_id, bom_para
+        FROM bloco_lancamentos
+        WHERE id = @id AND bloco_id = @bloco_id
+      `);
+    if (!lancRS.recordset.length) return res.status(404).json({ message: "Lançamento não encontrado" });
+
+    const bom_para = lancRS.recordset[0].bom_para as Date | null;
+    if (bom_para) {
+      return res.status(409).json({
+        message:
+          "Este lançamento possui 'bom para' (gera/gerou Título a receber). Exclua/ajuste o título correspondente antes de remover o lançamento."
+      });
+    }
+
+    await pool.request()
+      .input("id", sql.Int, lanc_id)
+      .input("bloco_id", sql.Int, bloco_id)
+      .query(`DELETE FROM bloco_lancamentos WHERE id = @id AND bloco_id = @bloco_id`);
+
+    return res.status(204).send();
+  } catch (err) {
+    console.error("Erro em deleteLancamento:", err);
     return res.status(500).json({ message: "Erro interno no servidor" });
   }
 };

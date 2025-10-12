@@ -43,11 +43,10 @@ const baixaSchema = z.object({
   obs: z.string().optional(),
 });
 
-export const registrarBaixaTitulo = async (req: Request, res: Response) => {
+// troque a assinatura para ter o usuário
+export const registrarBaixaTitulo = async (req: AuthenticatedRequest, res: Response) => {
   const tituloId = Number(req.params.id);
-  if (!Number.isFinite(tituloId)) {
-    return res.status(400).json({ message: "ID inválido" });
-  }
+  if (!Number.isFinite(tituloId)) return res.status(400).json({ message: "ID inválido" });
 
   try {
     const raw = baixaSchema.parse(req.body);
@@ -56,15 +55,14 @@ export const registrarBaixaTitulo = async (req: Request, res: Response) => {
 
     const forma = raw.forma_pagto ?? raw.forma ?? undefined;
     const observacao = raw.obs ?? raw.observacao ?? undefined;
+    const userId = req.user?.id ?? null; // <<<<< AQUI: operador que deu a baixa
 
     const titRS = await pool.request().input("id", sql.Int, tituloId).query(`
       SELECT id, cliente_id, bloco_id, valor_bruto, valor_baixado, status
       FROM financeiro_titulos
       WHERE id = @id
     `);
-    if (!titRS.recordset.length) {
-      return res.status(404).json({ message: "Título não encontrado" });
-    }
+    if (!titRS.recordset.length) return res.status(404).json({ message: "Título não encontrado" });
 
     const titulo = titRS.recordset[0] as {
       id: number; cliente_id: number; bloco_id: number | null;
@@ -76,7 +74,6 @@ export const registrarBaixaTitulo = async (req: Request, res: Response) => {
 
     const tx = new sql.Transaction(pool);
     await tx.begin();
-
     try {
       // 1) Atualiza o título
       await new sql.Request(tx)
@@ -90,7 +87,7 @@ export const registrarBaixaTitulo = async (req: Request, res: Response) => {
           WHERE id = @id
         `);
 
-      // 2) Lança SAÍDA imediata no bloco para refletir no Saldo
+      // 2) Lança a baixa no bloco (impacta saldo) e guarda quem baixou
       if (titulo.bloco_id) {
         const dataISO = toISO(raw.data_baixa) ?? new Date().toISOString();
 
@@ -108,8 +105,8 @@ export const registrarBaixaTitulo = async (req: Request, res: Response) => {
             sql.VarChar(sql.MAX),
             observacao ? `Baixa ${forma ?? ""} - ${observacao}`.trim() : `Baixa ${forma ?? ""}`.trim()
           )
-          .input("sentido", sql.VarChar(10), "SAIDA") // SAÍDA POSITIVA
-          .input("criado_por", sql.Int, null)
+          .input("sentido", sql.VarChar(10), "SAIDA")
+          .input("criado_por", sql.Int, userId) // <<<<< AQUI: operador
           .query(`
             INSERT INTO bloco_lancamentos
               (bloco_id, tipo_recebimento, valor, data_lancamento, bom_para, tipo_cheque,
@@ -121,20 +118,18 @@ export const registrarBaixaTitulo = async (req: Request, res: Response) => {
       }
 
       await tx.commit();
+      return res.json({ message: "Baixa registrada", status: statusNovo, valor_baixado: novoBaixado });
     } catch (e) {
       await tx.rollback();
       throw e;
     }
-
-    return res.json({ message: "Baixa registrada", status: statusNovo, valor_baixado: novoBaixado });
   } catch (e: any) {
-    if (e instanceof z.ZodError) {
-      return res.status(400).json({ message: "Erro de validação", errors: e.errors });
-    }
+    if (e instanceof z.ZodError) return res.status(400).json({ message: "Erro de validação", errors: e.errors });
     console.error("Erro ao registrar baixa:", e);
     return res.status(500).json({ message: "Erro interno no servidor" });
   }
 };
+
 
 /* ======================================================================
    2) LISTAGEM DE TÍTULOS (usada pelo /financeiro/receber)

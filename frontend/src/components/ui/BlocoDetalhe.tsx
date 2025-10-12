@@ -4,9 +4,10 @@ import {
   getBloco,
   listarLancamentos,
   adicionarLancamento,
-  getSaldo,      // legado (mantido)
-  getSaldos,     // novo
+  getSaldo,      // legado (fallback)
+  getSaldos,     // novo (saldo + a receber)
   fecharBloco,
+  excluirLancamento,       // ⟵ excluir lançamento
 } from "../../services/blocos.api";
 import api from "../../services/api";
 
@@ -44,9 +45,12 @@ export default function BlocoDetalhe() {
       sentido: Sentido;
       valor: number;
       data_lancamento: string;
-      status: LancStatus;
+      bom_para?: string | null;
       numero_referencia?: string | null;
       observacao?: string | null;
+      criado_por?: number | null;
+      criado_por_nome?: string | null;
+      status?: LancStatus; // mantido só para filtro
     }>
   >([]);
   const [lPage, setLPage] = useState(1);
@@ -194,6 +198,21 @@ export default function BlocoDetalhe() {
       alert(e?.response?.data?.message || "Falha ao adicionar lançamento.");
     } finally {
       setSavingLanc(false);
+    }
+  }
+
+  async function doDel(lancId: number, temBomPara: boolean) {
+    if (!podeEditar) return;
+    if (temBomPara) {
+      return alert("Este lançamento possui 'bom para' (A Receber). Exclua/ajuste o título correspondente antes.");
+    }
+    const ok = confirm("Excluir este lançamento? Esta ação não pode ser desfeita.");
+    if (!ok) return;
+    try {
+      await excluirLancamento(blocoId, lancId);
+      await loadLancs();
+    } catch (e: any) {
+      alert(e?.response?.data?.message || "Falha ao excluir lançamento.");
     }
   }
 
@@ -450,28 +469,53 @@ export default function BlocoDetalhe() {
                   <th className="p-2 border">Sentido</th>
                   <th className="p-2 border">Valor</th>
                   <th className="p-2 border">Data</th>
-                  <th className="p-2 border">Status</th>
+                  <th className="p-2 border">Bom para</th>
                   <th className="p-2 border">Ref</th>
+                  <th className="p-2 border">Por</th>
                   <th className="p-2 border">Obs</th>
+                  <th className="p-2 border">Ações</th>
                 </tr>
               </thead>
               <tbody>
-                {lancs.map((l) => (
-                  <tr key={l.id} className={l.sentido === "ENTRADA" ? "bg-red-50/60" : "bg-emerald-50/60"}>
-                    <td className="p-2 border">{l.tipo_recebimento}</td>
-                    <td className="p-2 border">{l.sentido}</td>
-                    <td className="p-2 border">
-                      {Number(l.valor).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}
-                    </td>
-                    <td className="p-2 border">{String(l.data_lancamento).slice(0, 10)}</td>
-                    <td className="p-2 border">{l.status}</td>
-                    <td className="p-2 border">{l.numero_referencia ?? "-"}</td>
-                    <td className="p-2 border">{l.observacao ?? "-"}</td>
-                  </tr>
-                ))}
+                {lancs.map((l) => {
+                  const isReceber = !!l.bom_para;
+                  const baseTone =
+                    isReceber
+                      ? "bg-amber-50/60"               // “A receber”
+                      : l.sentido === "ENTRADA"
+                        ? "bg-red-50/60"
+                        : "bg-emerald-50/60";
+
+                  return (
+                    <tr key={l.id} className={baseTone}>
+                      <td className="p-2 border">{l.tipo_recebimento}</td>
+                      <td className="p-2 border">{l.sentido}</td>
+                      <td className="p-2 border">
+                        {Number(l.valor).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}
+                      </td>
+                      <td className="p-2 border">{String(l.data_lancamento).slice(0, 10)}</td>
+                      <td className="p-2 border">{l.bom_para ? String(l.bom_para).slice(0, 10) : "-"}</td>
+                      <td className="p-2 border">{l.numero_referencia ?? "-"}</td>
+                      <td className="p-2 border">
+                        {l.criado_por_nome?.trim() || (l.criado_por ? `#${l.criado_por}` : "-")}
+                      </td>
+                      <td className="p-2 border">{l.observacao ?? "-"}</td>
+                      <td className="p-2 border">
+                        <button
+                          className="px-2 py-1 rounded-lg border text-xs hover:bg-slate-50 disabled:opacity-50"
+                          disabled={!podeEditar || !!l.bom_para}
+                          onClick={() => doDel(l.id, !!l.bom_para)}
+                          title={l.bom_para ? "Exclua/ajuste primeiro o título gerado" : "Excluir lançamento"}
+                        >
+                          Excluir
+                        </button>
+                      </td>
+                    </tr>
+                  );
+                })}
                 {lancs.length === 0 && (
                   <tr>
-                    <td colSpan={8} className="p-5 text-center text-slate-500">
+                    <td colSpan={9} className="p-5 text-center text-slate-500">
                       Nenhum lançamento.
                     </td>
                   </tr>
@@ -490,9 +534,7 @@ export default function BlocoDetalhe() {
             </button>
             <select className="ml-3 border rounded-xl px-2 py-1" value={lLimit} onChange={(e) => setLLimit(Number(e.target.value))}>
               {[10, 25, 50].map((n) => (
-                <option key={n} value={n}>
-                  {n}/pág
-                </option>
+                <option key={n} value={n}>{n}/pág</option>
               ))}
             </select>
           </div>

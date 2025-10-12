@@ -1,6 +1,6 @@
 ﻿import express, { NextFunction, Request, Response } from "express";
 import cors from "cors";
-import morgan from "morgan";
+// import morgan from "morgan";
 
 import authRoutes from "./routes/auth.routes";
 import clientesRoutes from "./routes/clientes.routes";
@@ -13,14 +13,13 @@ import formasPagamentoRoutes from "./routes/formasPagamento.routes";
 import pagamentosRoutes from "./routes/pagamentos.routes";
 import pedidoParametrosRoutes from "./routes/pedidoParametros.routes";
 import financeiroRoutes from "./routes/financeiro.routes";
-
 import { connectDB } from "./db";
 
 const app = express();
 
 /* ---------- middlewares básicos ---------- */
 app.use(cors());
-app.use(morgan("dev"));
+// app.use(morgan("dev"));
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: false }));
 
@@ -28,7 +27,6 @@ app.use(express.urlencoded({ extended: false }));
 app.get("/", (_req, res) => res.send("API is running"));
 app.get("/healthz", (_req, res) => res.status(200).json({ status: "ok" }));
 app.get("/ready", (_req, res) => res.status(200).json({ ready: true }));
-
 /* ---------- rotas da aplicação ---------- */
 app.use("/auth", authRoutes);
 app.use("/clientes", clientesRoutes);

@@ -59,16 +59,16 @@ function MetricCard(props: {
 }) {
   const { title, value, linkTo, linkText = "ver", icon, loading, tooltip, ...a11y } = props;
   return (
-    <Card aria-busy={loading}>
-      <CardHeader>
+    <Card aria-busy={loading} className="overflow-hidden">
+      <CardHeader className="pb-2">
         <CardTitle className="text-slate-500 flex items-center gap-2">
-          {icon && <span aria-hidden>{icon}</span>}
+          {icon && <span aria-hidden className="text-lg">{icon}</span>}
           <span title={tooltip}>{title}</span>
         </CardTitle>
       </CardHeader>
-      <CardContent className="flex items-end justify-between">
+      <CardContent className="flex items-end justify-between pb-5">
         <div className="min-h-[40px]" {...a11y}>
-          {loading ? <SkeletonBox className="h-8 w-28" /> : value}
+          {loading ? <SkeletonBox className="h-8 w-32" /> : value}
         </div>
         {linkTo && (
           <Link to={linkTo} className="text-blue-600 hover:underline text-sm">
@@ -102,7 +102,7 @@ export default function Home() {
 
   const [clientesTotal, setClientesTotal] = useState<number>(0);
   const [blocosAbertosTotal, setBlocosAbertosTotal] = useState<number>(0);
-  const [saldoTop5, setSaldoTop5] = useState<number>(0);
+  const [saldoTop5, setSaldoTop5] = useState<number>(0); // saldo imediato (ignora bom_para)
   const [blocosRecentes, setBlocosRecentes] = useState<BlocoItem[]>([]);
 
   const [loading, setLoading] = useState<boolean>(true);
@@ -132,14 +132,17 @@ export default function Home() {
       setBlocosRecentes(lista);
       setBlocosAbertosTotal(extractTotal(respBlocos));
 
-      // 3) saldoTop5 = soma do saldo dos 5 blocos listados (se API não trouxer embutido)
-      const saldosResp = await Promise.all(lista.map((b) => api.get(`/blocos/${b.id}/saldo`)));
-      const soma = saldosResp.reduce((acc, r) => {
-        const s = typeof r.data?.saldo === "number" ? r.data.saldo : r.data;
-        const val = typeof s === "number" ? s : Number(s?.saldo ?? 0);
+      // 3) saldo imediato dos top 5 (IGNORA bom_para).
+      // Usa o endpoint novo /blocos/:id/saldos -> { saldo, a_receber }
+      const saldosResp = await Promise.all(
+        lista.map((b) => api.get(`/blocos/${b.id}/saldos`))
+      );
+      const somaSaldoImediato = saldosResp.reduce((acc, r) => {
+        const raw = r?.data ?? {};
+        const val = Number((raw as any).saldo ?? 0);
         return acc + (isFinite(val) ? val : 0);
       }, 0);
-      setSaldoTop5(soma);
+      setSaldoTop5(somaSaldoImediato);
     } catch (e: any) {
       console.error("Erro no dashboard:", e);
       const msg = e?.response?.data?.message || e?.message || "Falha ao carregar o dashboard.";
@@ -163,10 +166,10 @@ export default function Home() {
   return (
     <div className="space-y-8">
       {/* hero */}
-      <section className="rounded-3xl bg-gradient-to-r from-slate-900 via-slate-800 to-slate-700 text-white p-8 shadow-md">
-        <div className="flex flex-col md:flex-row md:items-end md:justify-between gap-6">
+      <section className="rounded-3xl bg-gradient-to-r from-slate-900 via-slate-800 to-slate-700 text-white px-8 py-7 shadow-md">
+        <div className="flex flex-col gap-6 md:flex-row md:items-end md:justify-between">
           <div>
-            <h2 className="text-2xl font-semibold">Bem-vindo</h2>
+            <h2 className="text-2xl font-semibold tracking-tight">Bem-vindo</h2>
             <p className="mt-1 text-slate-300">Visão geral do financeiro e acessos rápidos.</p>
           </div>
           <div className="flex gap-3">
@@ -177,7 +180,12 @@ export default function Home() {
             >
               Abrir blocos
             </Button>
-            <Button onClick={() => navigate("/pagamentos")}>Novo pagamento</Button>
+            <Button
+              className="bg-blue-600 hover:bg-blue-700"
+              onClick={() => navigate("/financeiro/receber")}
+            >
+              Ir ao Financeiro
+            </Button>
           </div>
         </div>
       </section>
@@ -193,7 +201,7 @@ export default function Home() {
       )}
 
       {/* métricas */}
-      <section className="grid grid-cols-1 md:grid-cols-3 gap-6">
+      <section className="grid grid-cols-1 gap-6 md:grid-cols-3">
         <MetricCard
           title="Clientes"
           icon="👥"
@@ -215,21 +223,23 @@ export default function Home() {
         />
 
         <MetricCard
-          title="Saldo (top 5 blocos)"
+          title="Saldo imediato (top 5 blocos)"
           icon="💰"
           loading={loading}
-          tooltip="Somatório do saldo dos 5 blocos mais recentes (ENTRADA – SAÍDA, ignorando CANCELADO)."
+          tooltip="Somatório do saldo IMEDIATO dos 5 blocos mais recentes (ENTRADA – SAÍDA, ignorando lançamentos com 'bom_para')."
           value={
             <div>
               <p className={`text-4xl font-extrabold ${saldoClass}`}>{currency(resumo.saldoTop5)}</p>
-              <p className="text-xs text-slate-500 mt-1">ENTRADA – SAÍDA (ignora CANCELADO)</p>
+              <p className="mt-1 text-xs text-slate-500">
+                ENTRADA – SAÍDA (ignora 'bom_para')
+              </p>
             </div>
           }
           aria-live="polite"
         />
       </section>
 
-      {/* atalhos */}
+      {/* atalhos essenciais */}
       <section>
         <Card>
           <CardHeader>
@@ -238,18 +248,16 @@ export default function Home() {
           <CardContent className="flex flex-wrap gap-3">
             <Shortcut to="/blocos" label="Blocos" icon="🧩" />
             <Shortcut to="/clientes" label="Clientes" icon="👥" />
-            <Shortcut to="/pagamentos" label="Pagamentos" icon="💸" />
-            <Shortcut to="/historico-pagamentos" label="Histórico" icon="🗂️" />
-            <Shortcut to="/formas-pagamento" label="Formas de pagamento" icon="🧾" />
+            <Shortcut to="/financeiro/receber" label="Financeiro" icon="💸" />
+            <Shortcut to="/conferencia" label="Conferência" icon="✅" />
             <Shortcut to="/transportadoras" label="Transportadoras" icon="🚚" />
-            <Shortcut to="/dominios" label="Domínios" icon="🧱" />
           </CardContent>
         </Card>
       </section>
 
       {/* blocos recentes */}
       <section>
-        <div className="flex items-center justify-between mb-3">
+        <div className="mb-3 flex items-center justify-between">
           <h3 className="text-lg font-semibold text-slate-800">Blocos abertos (recentes)</h3>
           <Link to="/blocos" className="text-sm text-blue-600 hover:underline">
             ver todos
@@ -259,32 +267,24 @@ export default function Home() {
         <Card>
           <CardContent className="p-0">
             {/* Tabela desktop */}
-            <div className="hidden sm:block overflow-x-auto">
+            <div className="hidden overflow-x-auto sm:block">
               <table className="min-w-full text-sm">
                 <thead>
-                  <tr className="text-left bg-slate-50 border-b border-slate-200 text-slate-600">
+                  <tr className="border-b border-slate-200 bg-slate-50 text-left text-slate-600">
                     <th className="px-4 py-3">Cliente</th>
                     <th className="px-4 py-3">Status</th>
                     <th className="px-4 py-3">Aberto em</th>
-                    <th className="px-4 py-3 w-28">Ações</th>
+                    <th className="w-28 px-4 py-3">Ações</th>
                   </tr>
                 </thead>
                 <tbody>
                   {loading &&
                     Array.from({ length: 3 }).map((_, i) => (
                       <tr key={`sk-${i}`} className="border-b last:border-0">
-                        <td className="px-4 py-3">
-                          <SkeletonBox className="h-4 w-48" />
-                        </td>
-                        <td className="px-4 py-3">
-                          <SkeletonBox className="h-6 w-20 rounded-full" />
-                        </td>
-                        <td className="px-4 py-3">
-                          <SkeletonBox className="h-4 w-36" />
-                        </td>
-                        <td className="px-4 py-3">
-                          <SkeletonBox className="h-4 w-14" />
-                        </td>
+                        <td className="px-4 py-3"><SkeletonBox className="h-4 w-48" /></td>
+                        <td className="px-4 py-3"><SkeletonBox className="h-6 w-20 rounded-full" /></td>
+                        <td className="px-4 py-3"><SkeletonBox className="h-4 w-36" /></td>
+                        <td className="px-4 py-3"><SkeletonBox className="h-4 w-14" /></td>
                       </tr>
                     ))}
 
@@ -316,7 +316,7 @@ export default function Home() {
             </div>
 
             {/* Lista mobile */}
-            <div className="sm:hidden divide-y">
+            <div className="divide-y sm:hidden">
               {loading &&
                 Array.from({ length: 3 }).map((_, i) => (
                   <div key={`skm-${i}`} className="p-4 space-y-2">
@@ -330,7 +330,7 @@ export default function Home() {
                 blocosRecentes.map((b) => (
                   <div key={b.id} className="p-4">
                     <div className="font-medium">{b.cliente ?? "-"}</div>
-                    <div className="text-sm text-slate-600 mt-1">{b.aberto_em ?? "-"}</div>
+                    <div className="mt-1 text-sm text-slate-600">{b.aberto_em ?? "-"}</div>
                     <div className="mt-3 flex items-center justify-between">
                       <Badge tone={b.status === "ABERTO" ? "success" : "neutral"}>{b.status}</Badge>
                       <Button size="sm" variant="outline" onClick={() => navigate(`/blocos/${b.id}`)}>

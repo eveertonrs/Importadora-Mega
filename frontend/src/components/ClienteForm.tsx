@@ -2,9 +2,10 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import api from "../services/api";
 
+/* ===================== Tipos ===================== */
 type ClientePayload = {
   nome_fantasia: string;
-  tabela_preco: string; // dinâmico
+  tabela_preco: string;
   grupo_empresa?: string | null;
   whatsapp?: string | null;
   anotacoes?: string | null;
@@ -13,9 +14,16 @@ type ClientePayload = {
   transportadora_id?: number | null;
 };
 
-type Transportadora = { id: number; nome?: string; nome_fantasia?: string; razao_social?: string };
+type Transportadora = {
+  id: number;
+  nome?: string;
+  nome_fantasia?: string;
+  razao_social?: string;
+};
+
 const onlyDigits = (s: string) => s.replace(/\D/g, "");
 
+/* ===================== Componente ===================== */
 export default function ClienteForm() {
   const { id } = useParams();
   const nav = useNavigate();
@@ -28,6 +36,7 @@ export default function ClienteForm() {
     recebe_whatsapp: false,
     transportadora_id: null,
   });
+
   const [loading, setLoading] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [ok, setOk] = useState(false);
@@ -40,11 +49,12 @@ export default function ClienteForm() {
     [editing, id]
   );
 
-  // combos dinâmicos
+  /* ===================== Combos dinâmicos ===================== */
   useEffect(() => {
     let cancel = false;
     (async () => {
       try {
+        // tabelas de preço
         try {
           const { data } = await api.get("/tabelas-preco", { headers: { "x-silent": "1" } });
           if (!cancel) setTabelas((data?.data ?? data ?? []) as string[]);
@@ -52,6 +62,7 @@ export default function ClienteForm() {
           const { data } = await api.get("/clientes/tabelas-preco", { headers: { "x-silent": "1" } });
           if (!cancel) setTabelas((data?.data ?? data ?? []) as string[]);
         }
+        // transportadoras (ativas)
         try {
           const { data } = await api.get("/transportadoras", {
             params: { status: "ATIVO", limit: 999 },
@@ -64,6 +75,7 @@ export default function ClienteForm() {
     return () => { cancel = true; };
   }, []);
 
+  /* ===================== Carregar para edição ===================== */
   async function load() {
     if (!editing) return;
     setLoading(true);
@@ -92,6 +104,7 @@ export default function ClienteForm() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
+  /* ===================== Salvar ===================== */
   const onSubmit = useCallback(
     async (e: React.FormEvent) => {
       e.preventDefault();
@@ -130,6 +143,7 @@ export default function ClienteForm() {
               else nav(-1);
             }, 400);
           } catch (err: any) {
+            // conflito por nome duplicado
             if (err?.response?.status === 409) {
               const exId = err.response.data?.existing_id;
               const confirma = confirm("Já existe um cliente com este nome.\nDeseja criar mesmo assim?");
@@ -138,8 +152,7 @@ export default function ClienteForm() {
                 const newId = r2.data?.id ?? r2.data?.data?.id;
                 setOk(true);
                 setTimeout(() => {
-                  if (newId) nav(`/clientes/${newId}`);
-                  else nav(-1);
+                  if (newId) nav(`/clientes/${newId}`); else nav(-1);
                 }, 400);
                 return;
               }
@@ -162,26 +175,29 @@ export default function ClienteForm() {
   const nomeTransportadora = (t?: Transportadora | null) =>
     (t?.nome_fantasia || t?.razao_social || t?.nome || "").trim();
 
+  /* ===================== UI ===================== */
   return (
-    <div className="mx-auto max-w-6xl">
-      <div className="mb-4 flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
+    <div className="mx-auto max-w-6xl space-y-6">
+      {/* HERO */}
+      <section className="rounded-3xl bg-gradient-to-r from-slate-900 via-slate-800 to-slate-700 text-white p-6 shadow">
+        <div className="flex flex-wrap items-end justify-between gap-3">
+          <div>
+            <h1 className="text-2xl font-semibold">{titulo}</h1>
+            <p className="text-slate-300">
+              Preencha os dados do cliente. Campos com <span className="text-rose-300">*</span> são obrigatórios.
+            </p>
+          </div>
           <button
             type="button"
             onClick={() => nav(-1)}
-            className="px-3 py-2 rounded-xl border hover:bg-slate-50"
+            className="rounded-xl bg-white/10 px-4 py-2 text-white ring-1 ring-white/30 hover:bg-white/20"
           >
             ← Voltar
           </button>
-          <div>
-            <h1 className="text-xl font-semibold">{titulo}</h1>
-            <p className="text-sm text-slate-500">
-              Preencha os dados do cliente. Campos com <span className="text-red-600">*</span> são obrigatórios.
-            </p>
-          </div>
         </div>
-      </div>
+      </section>
 
+      {/* FORM */}
       <form
         onSubmit={onSubmit}
         onKeyDown={(e) => {
@@ -192,12 +208,12 @@ export default function ClienteForm() {
         {(err || ok) && (
           <div className="p-4 border-b">
             {err && (
-              <div className="text-sm text-red-700 bg-red-50 border border-red-200 rounded p-3">
+              <div className="text-sm text-rose-700 bg-rose-50 border border-rose-200 rounded-xl p-3">
                 {err}
               </div>
             )}
             {ok && (
-              <div className="text-sm text-emerald-700 bg-emerald-50 border border-emerald-200 rounded p-3">
+              <div className="text-sm text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-xl p-3">
                 Cliente salvo com sucesso!
               </div>
             )}
@@ -205,16 +221,18 @@ export default function ClienteForm() {
         )}
 
         <div className="grid grid-cols-1 gap-6 p-5 lg:grid-cols-12">
+          {/* COL ESQUERDA */}
           <div className="lg:col-span-8 space-y-6">
-            <section className="space-y-4">
-              <h2 className="text-base font-semibold text-slate-800">Identificação</h2>
+            {/* Identificação */}
+            <section className="rounded-xl border p-4">
+              <h2 className="mb-3 text-base font-semibold text-slate-800">Identificação</h2>
               <div className="grid gap-4 sm:grid-cols-2">
                 <div>
                   <label className="text-sm text-slate-600">
-                    Nome fantasia <span className="text-red-600">*</span>
+                    Nome fantasia <span className="text-rose-600">*</span>
                   </label>
                   <input
-                    className="mt-1 border rounded-xl px-3 py-2 w-full focus:outline-none focus:ring-2 focus:ring-blue-200"
+                    className="mt-1 w-full rounded-xl border px-3 py-2 outline-none focus:ring-2 focus:ring-blue-200"
                     required
                     value={form.nome_fantasia}
                     onChange={(e) => setForm((s) => ({ ...s, nome_fantasia: e.target.value }))}
@@ -225,7 +243,7 @@ export default function ClienteForm() {
                 <div>
                   <label className="text-sm text-slate-600">Grupo empresa</label>
                   <input
-                    className="mt-1 border rounded-xl px-3 py-2 w-full focus:outline-none focus:ring-2 focus:ring-blue-200"
+                    className="mt-1 w-full rounded-xl border px-3 py-2 outline-none focus:ring-2 focus:ring-blue-200"
                     value={form.grupo_empresa ?? ""}
                     onChange={(e) => setForm((s) => ({ ...s, grupo_empresa: e.target.value || null }))}
                     placeholder="ex.: Grupo XPTO"
@@ -234,13 +252,14 @@ export default function ClienteForm() {
               </div>
             </section>
 
-            <section className="space-y-4">
-              <h2 className="text-base font-semibold text-slate-800">Contato</h2>
+            {/* Contato */}
+            <section className="rounded-xl border p-4">
+              <h2 className="mb-3 text-base font-semibold text-slate-800">Contato</h2>
               <div className="grid gap-4 sm:grid-cols-2">
                 <div>
                   <label className="text-sm text-slate-600">WhatsApp</label>
                   <input
-                    className="mt-1 border rounded-xl px-3 py-2 w-full focus:outline-none focus:ring-2 focus:ring-blue-200"
+                    className="mt-1 w-full rounded-xl border px-3 py-2 outline-none focus:ring-2 focus:ring-blue-200"
                     value={form.whatsapp ?? ""}
                     onChange={(e) => setForm((s) => ({ ...s, whatsapp: e.target.value || null }))}
                     inputMode="tel"
@@ -253,10 +272,11 @@ export default function ClienteForm() {
               </div>
             </section>
 
-            <section className="space-y-3">
-              <h2 className="text-base font-semibold text-slate-800">Anotações</h2>
+            {/* Anotações */}
+            <section className="rounded-xl border p-4">
+              <h2 className="mb-3 text-base font-semibold text-slate-800">Anotações</h2>
               <textarea
-                className="mt-1 border rounded-xl px-3 py-2 w-full min-h-[140px] focus:outline-none focus:ring-2 focus:ring-blue-200"
+                className="mt-1 min-h-[140px] w-full rounded-xl border px-3 py-2 outline-none focus:ring-2 focus:ring-blue-200"
                 value={form.anotacoes ?? ""}
                 onChange={(e) => setForm((s) => ({ ...s, anotacoes: e.target.value || null }))}
                 placeholder="Observações gerais, preferências, restrições…"
@@ -264,30 +284,36 @@ export default function ClienteForm() {
             </section>
           </div>
 
+          {/* COL DIREITA */}
           <div className="lg:col-span-4 space-y-6">
-            <section className="space-y-4 rounded-xl border p-4">
-              <h2 className="text-base font-semibold text-slate-800">Comercial</h2>
+            {/* Comercial */}
+            <section className="rounded-xl border p-4">
+              <h2 className="mb-3 text-base font-semibold text-slate-800">Comercial</h2>
               <div className="grid gap-4">
-                {/* Tabela de preço (dinâmica, com fallback para input livre) */}
+                {/* Tabela de preço (dinâmica; fallback input) */}
                 <div>
                   <label className="text-sm text-slate-600">
-                    Tabela de preço <span className="text-red-600">*</span>
+                    Tabela de preço <span className="text-rose-600">*</span>
                   </label>
                   {tabelas.length > 0 ? (
                     <select
-                      className="mt-1 border rounded-xl px-3 py-2 w-full focus:outline-none focus:ring-2 focus:ring-blue-200"
+                      className="mt-1 w-full rounded-xl border px-3 py-2 outline-none focus:ring-2 focus:ring-blue-200"
                       value={form.tabela_preco}
                       onChange={(e) => setForm((s) => ({ ...s, tabela_preco: e.target.value }))}
                       required
                     >
-                      <option value="" disabled>(selecione)</option>
+                      <option value="" disabled>
+                        (selecione)
+                      </option>
                       {tabelas.map((t) => (
-                        <option key={t} value={t}>{t}</option>
+                        <option key={t} value={t}>
+                          {t}
+                        </option>
                       ))}
                     </select>
                   ) : (
                     <input
-                      className="mt-1 border rounded-xl px-3 py-2 w-full focus:outline-none focus:ring-2 focus:ring-blue-200"
+                      className="mt-1 w-full rounded-xl border px-3 py-2 outline-none focus:ring-2 focus:ring-blue-200"
                       value={form.tabela_preco}
                       onChange={(e) => setForm((s) => ({ ...s, tabela_preco: e.target.value }))}
                       placeholder="ex.: ESPECIAL"
@@ -301,7 +327,7 @@ export default function ClienteForm() {
                   <label className="text-sm text-slate-600">Transportadora (associada ao cliente)</label>
                   {transportadoras.length > 0 ? (
                     <select
-                      className="mt-1 border rounded-xl px-3 py-2 w-full focus:outline-none focus:ring-2 focus:ring-blue-200"
+                      className="mt-1 w-full rounded-xl border px-3 py-2 outline-none focus:ring-2 focus:ring-blue-200"
                       value={form.transportadora_id ?? ""}
                       onChange={(e) =>
                         setForm((s) => ({
@@ -312,27 +338,33 @@ export default function ClienteForm() {
                     >
                       <option value="">(nenhuma)</option>
                       {transportadoras.map((t) => (
-                        <option key={t.id} value={t.id}>{nomeTransportadora(t)}</option>
+                        <option key={t.id} value={t.id}>
+                          {nomeTransportadora(t)}
+                        </option>
                       ))}
                     </select>
                   ) : (
-                    <div className="text-xs text-slate-500 mt-1">Nenhuma transportadora disponível.</div>
+                    <div className="mt-1 text-xs text-slate-500">Nenhuma transportadora disponível.</div>
                   )}
                 </div>
 
+                {/* Status */}
                 <div>
                   <label className="text-sm text-slate-600">Status</label>
                   <select
-                    className="mt-1 border rounded-xl px-3 py-2 w-full focus:outline-none focus:ring-2 focus:ring-blue-200"
+                    className="mt-1 w-full rounded-xl border px-3 py-2 outline-none focus:ring-2 focus:ring-blue-200"
                     value={form.status ?? "ATIVO"}
-                    onChange={(e) => setForm((s) => ({ ...s, status: (e.target.value as "ATIVO" | "INATIVO") ?? "ATIVO" }))}
+                    onChange={(e) =>
+                      setForm((s) => ({ ...s, status: (e.target.value as "ATIVO" | "INATIVO") ?? "ATIVO" }))
+                    }
                   >
                     <option value="ATIVO">ATIVO</option>
                     <option value="INATIVO">INATIVO</option>
                   </select>
                 </div>
 
-                <label className="flex items-center gap-2">
+                {/* Notificação por WhatsApp */}
+                <label className="inline-flex items-center gap-2 rounded-lg bg-slate-50 px-3 py-2 ring-1 ring-slate-200">
                   <input
                     id="recebe_wpp"
                     type="checkbox"
@@ -345,12 +377,13 @@ export default function ClienteForm() {
               </div>
             </section>
 
+            {/* Ações */}
             <section className="rounded-xl border p-4">
               <div className="flex flex-col gap-2">
                 <button
                   type="submit"
                   disabled={loading}
-                  className="px-4 py-2 bg-blue-600 text-white rounded-xl hover:bg-blue-700 disabled:opacity-50"
+                  className="rounded-xl bg-blue-600 px-4 py-2 text-white hover:bg-blue-700 disabled:opacity-50"
                   title="Ctrl+Enter para salvar"
                 >
                   {loading ? "Salvando..." : "Salvar"}
@@ -358,7 +391,7 @@ export default function ClienteForm() {
                 <button
                   type="button"
                   onClick={() => nav(-1)}
-                  className="px-4 py-2 bg-slate-100 rounded-xl hover:bg-slate-200"
+                  className="rounded-xl bg-slate-100 px-4 py-2 hover:bg-slate-200"
                 >
                   Cancelar
                 </button>

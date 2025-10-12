@@ -1,3 +1,4 @@
+// src/pages/ClienteDetalhes.tsx
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import api from "../services/api";
@@ -47,6 +48,14 @@ const formatBRL = (v: number) =>
 const nomeTransp = (t: { nome_fantasia?: string | null; razao_social?: string | null; nome?: string | null }) =>
   (t?.nome_fantasia || t?.razao_social || t?.nome || "").trim();
 
+const copy = async (s: string) => {
+  try {
+    await navigator.clipboard.writeText(s);
+  } catch {
+    // silencioso
+  }
+};
+
 /* ===================== Componente ===================== */
 export default function ClienteDetalhes() {
   const { id } = useParams<{ id: string }>();
@@ -56,8 +65,8 @@ export default function ClienteDetalhes() {
   const [loading, setLoading] = useState(true);
 
   // saldos
-  const [saldo, setSaldo] = useState<number>(0);          // saldo total (imediato + créditos - débitos)
-  const [aReceber, setAReceber] = useState<number>(0);    // títulos ABERTO/PARCIAL do cliente
+  const [saldo, setSaldo] = useState<number>(0);
+  const [aReceber, setAReceber] = useState<number>(0);
   const [saldoLoading, setSaldoLoading] = useState(false);
 
   const [docs, setDocs] = useState<Doc[]>([]);
@@ -71,11 +80,12 @@ export default function ClienteDetalhes() {
   // modal associar
   const [openAssoc, setOpenAssoc] = useState(false);
   const [listaTransp, setListaTransp] = useState<Transportadora[]>([]);
+  const [filtroTransp, setFiltroTransp] = useState("");
   const [selTransp, setSelTransp] = useState<number | "">("");
   const [selPrincipal, setSelPrincipal] = useState(true);
   const [assocSaving, setAssocSaving] = useState(false);
 
-  // carrega cliente (dados básicos)
+  /* ---------- Carrega cliente ---------- */
   useEffect(() => {
     let cancel = false;
     (async () => {
@@ -98,39 +108,37 @@ export default function ClienteDetalhes() {
           ativo: status === "ATIVO",
         });
 
-        // se o endpoint já devolver a_receber no GET /clientes/:id, hidrata aqui também
         if (typeof raw?.a_receber === "number") setAReceber(Number(raw.a_receber || 0));
       } finally {
         if (!cancel) setLoading(false);
       }
     })();
-    return () => { cancel = true; };
+    return () => {
+      cancel = true;
+    };
   }, [id]);
 
-  // saldos (saldo + a_receber) — usa /clientes/:id/saldo
-  useEffect(() => {
+  /* ---------- Saldos ---------- */
+  async function recarregarSaldos() {
     if (!id) return;
-    let cancel = false;
-    (async () => {
-      try {
-        setSaldoLoading(true);
-        const { data } = await api.get(`/clientes/${id}/saldo`, { headers: { "x-silent": "1" } });
-        if (cancel) return;
-        setSaldo(Number(data?.saldo ?? 0));
-        setAReceber(Number(data?.a_receber ?? 0));
-      } catch {
-        if (!cancel) {
-          setSaldo(0);
-          setAReceber(0);
-        }
-      } finally {
-        if (!cancel) setSaldoLoading(false);
-      }
-    })();
-    return () => { cancel = true; };
+    try {
+      setSaldoLoading(true);
+      const { data } = await api.get(`/clientes/${id}/saldo`, { headers: { "x-silent": "1" } });
+      setSaldo(Number(data?.saldo ?? 0));
+      setAReceber(Number(data?.a_receber ?? 0));
+    } catch {
+      setSaldo(0);
+      setAReceber(0);
+    } finally {
+      setSaldoLoading(false);
+    }
+  }
+  useEffect(() => {
+    recarregarSaldos();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
-  // documentos
+  /* ---------- Documentos ---------- */
   useEffect(() => {
     if (!id) return;
     let cancel = false;
@@ -146,10 +154,12 @@ export default function ClienteDetalhes() {
         if (!cancel) setDocsLoading(false);
       }
     })();
-    return () => { cancel = true; };
+    return () => {
+      cancel = true;
+    };
   }, [id]);
 
-  // vínculos de transportadoras do cliente
+  /* ---------- Vínculos de transportadoras ---------- */
   async function loadVinculos() {
     if (!id) return;
     setVLoading(true);
@@ -164,7 +174,9 @@ export default function ClienteDetalhes() {
       setVLoading(false);
     }
   }
-  useEffect(() => { loadVinculos(); }, [id]);
+  useEffect(() => {
+    loadVinculos();
+  }, [id]);
 
   // opções de transportadoras (para o modal)
   useEffect(() => {
@@ -183,6 +195,7 @@ export default function ClienteDetalhes() {
   }, [openAssoc]);
 
   const isAtivo = cli?.status === "ATIVO" || cli?.ativo;
+  const docsPrincipal = useMemo(() => docs.find((d) => d.principal), [docs]);
 
   const saldoTone = useMemo(() => {
     if ((saldo ?? 0) > 0) return "from-emerald-50 to-emerald-100 ring-emerald-200 text-emerald-800";
@@ -193,12 +206,8 @@ export default function ClienteDetalhes() {
   /* ---------- Loading skeleton ---------- */
   if (loading || !cli) {
     return (
-      <div className="space-y-5 animate-pulse">
-        <div className="flex items-center gap-3">
-          <div className="h-9 w-24 rounded-xl border bg-white" />
-          <div className="h-6 w-64 rounded bg-slate-200" />
-          <div className="ml-auto h-12 w-64 rounded-2xl bg-slate-100" />
-        </div>
+      <div className="space-y-6 animate-pulse">
+        <div className="h-24 rounded-3xl bg-slate-200/50" />
         <div className="grid gap-5 md:grid-cols-3">
           <div className="md:col-span-2 h-72 rounded-2xl border bg-white" />
           <div className="space-y-5">
@@ -210,70 +219,99 @@ export default function ClienteDetalhes() {
     );
   }
 
+  /* ---------- UI ---------- */
+  const opcoesTranspFiltradas = listaTransp.filter((t) =>
+    nomeTransp(t).toLowerCase().includes(filtroTransp.toLowerCase())
+  );
+
   return (
-    <div className="space-y-5">
-      {/* Header */}
-      <div className="flex items-center gap-3">
-        <button
-          className="group inline-flex items-center gap-2 rounded-xl border px-3 py-2 hover:bg-slate-50"
-          onClick={() => nav(-1)}
-        >
-          <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M15 19l-7-7 7-7" />
-          </svg>
-          <span className="font-medium group-hover:translate-x-[-1px] transition-transform">Voltar</span>
-        </button>
+    <div className="space-y-6">
+      {/* HERO */}
+      <section className="rounded-3xl bg-gradient-to-r from-slate-900 via-slate-800 to-slate-700 text-white p-6 shadow">
+        <div className="flex flex-wrap items-end justify-between gap-4">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <button
+                className="rounded-lg bg-white/10 px-3 py-1.5 ring-1 ring-white/30 hover:bg-white/20"
+                onClick={() => nav(-1)}
+                title="Voltar"
+              >
+                ← Voltar
+              </button>
+              <span
+                className={
+                  "rounded-full px-2 py-0.5 text-[11px] ring-1 " +
+                  (isAtivo
+                    ? "bg-emerald-500/10 text-emerald-200 ring-emerald-300/30"
+                    : "bg-white/10 text-white ring-white/30")
+                }
+              >
+                {isAtivo ? "ATIVO" : "INATIVO"}
+              </span>
+            </div>
 
-        <div className="flex flex-col">
-          <h1 className="text-2xl font-semibold tracking-tight">
-            {cli.nome_fantasia?.toUpperCase()} <span className="text-slate-400">#{cli.id}</span>
-          </h1>
-          <div className="mt-1">
-            {isAtivo ? (
-              <span className="inline-flex items-center gap-1 rounded-full bg-emerald-50 text-emerald-700 text-[11px] px-2 py-0.5 ring-1 ring-emerald-200">
-                ✓ ATIVO
-              </span>
-            ) : (
-              <span className="inline-flex items-center gap-1 rounded-full bg-slate-200 text-slate-700 text-[11px] px-2 py-0.5">
-                × INATIVO
-              </span>
-            )}
+            <h1 className="mt-2 truncate text-2xl font-semibold">
+              {cli.nome_fantasia} <span className="text-slate-300">#{cli.id}</span>
+            </h1>
+
+            {/* Informações rápidas */}
+            <div className="mt-1 text-sm text-slate-300">
+              {docsPrincipal ? (
+                <>
+                  Doc principal: <span className="font-medium">{docsPrincipal.doc_tipo}</span>{" "}
+                  <button
+                    className="underline decoration-1 underline-offset-2 hover:text-white/90"
+                    onClick={() => copy(docsPrincipal.doc_numero)}
+                    title="Copiar"
+                  >
+                    {docsPrincipal.doc_numero}
+                  </button>
+                </>
+              ) : (
+                <span className="opacity-75">Sem documento principal</span>
+              )}
+              {cli.tabela_preco && <span className="ml-3">• Tabela: {cli.tabela_preco}</span>}
+            </div>
           </div>
-        </div>
 
-        {/* Cartões de saldo (2) */}
-        <div className="ml-auto grid grid-cols-2 gap-3">
-          <div
-            className={`inline-flex items-center gap-3 rounded-2xl bg-gradient-to-br px-4 py-3 ring-1 ${saldoTone} shadow-sm`}
-            title="Saldo acumulado (positivo = crédito; negativo = débito)"
-          >
-            <div className="flex flex-col">
-              <span className="text-xs/4 text-slate-600">Saldo</span>
-              <span className="text-2xl font-bold tracking-tight">
+          {/* Cards de saldo */}
+          <div className="grid grid-cols-2 gap-3">
+            <div
+              className={`rounded-2xl bg-gradient-to-br px-4 py-3 ring-1 ${saldoTone} shadow-sm`}
+              title="Saldo acumulado (positivo = crédito; negativo = débito)"
+            >
+              <div className="text-xs text-slate-700/80">Saldo</div>
+              <div className="text-2xl font-bold tracking-tight">
                 {saldoLoading ? "calculando…" : formatBRL(saldo)}
-              </span>
+              </div>
             </div>
-          </div>
 
-          <div
-            className="inline-flex items-center gap-3 rounded-2xl bg-gradient-to-br from-amber-50 to-yellow-50 ring-1 ring-amber-200 text-amber-900 px-4 py-3 shadow-sm"
-            title="Títulos do cliente em ABERTO/PARCIAL"
-          >
-            <div className="flex flex-col">
-              <span className="text-xs/4">A receber</span>
-              <span className="text-2xl font-bold tracking-tight">
+            <div
+              className="rounded-2xl bg-gradient-to-br from-amber-50 to-yellow-50 ring-1 ring-amber-200 text-amber-900 px-4 py-3 shadow-sm"
+              title="Títulos em ABERTO/PARCIAL do cliente"
+            >
+              <div className="text-xs">A receber</div>
+              <div className="text-2xl font-bold tracking-tight">
                 {saldoLoading ? "…" : formatBRL(aReceber)}
-              </span>
+              </div>
             </div>
+
+            <button
+              onClick={recarregarSaldos}
+              className="col-span-2 mt-1 rounded-xl bg-white/10 px-3 py-1.5 text-white ring-1 ring-white/30 hover:bg-white/20"
+              title="Recarregar saldos"
+            >
+              ↻ Atualizar saldos
+            </button>
           </div>
         </div>
-      </div>
+      </section>
 
-      {/* Grid principal */}
-      <div className="grid gap-5 md:grid-cols-3">
+      {/* GRID PRINCIPAL */}
+      <div className="grid gap-6 md:grid-cols-3">
         {/* Dados do cliente */}
-        <div className="md:col-span-2 rounded-2xl border p-5 shadow-sm bg-white">
-          <h2 className="text-sm font-medium text-slate-600 mb-4">Dados do cliente</h2>
+        <div className="md:col-span-2 rounded-2xl border bg-white p-5 shadow-sm">
+          <h2 className="mb-4 text-sm font-medium text-slate-600">Dados do cliente</h2>
 
           <div className="grid gap-6 sm:grid-cols-2">
             <div className="space-y-1.5">
@@ -289,18 +327,28 @@ export default function ClienteDetalhes() {
             <div className="space-y-1.5">
               <div className="text-xs font-medium text-slate-500">WhatsApp</div>
               {cli.whatsapp ? (
-                <a
-                  className="inline-flex items-center gap-2 text-blue-700 underline decoration-1 underline-offset-2 hover:text-blue-800"
-                  href={`https://wa.me/${cli.whatsapp.replace(/\D/g, "")}`}
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  {cli.whatsapp}
-                  <svg viewBox="0 0 24 24" className="h-4 w-4" fill="currentColor">
-                    <path d="M14 3h7v7h-2V6.41l-9.29 9.3-1.42-1.42 9.3-9.29H14V3z" />
-                    <path d="M5 5h5V3H3v7h2V5z" />
-                  </svg>
-                </a>
+                <div className="flex items-center gap-2">
+                  <a
+                    className="inline-flex items-center gap-2 text-blue-700 underline decoration-1 underline-offset-2 hover:text-blue-800"
+                    href={`https://wa.me/${cli.whatsapp.replace(/\D/g, "")}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    title="Abrir no WhatsApp"
+                  >
+                    {cli.whatsapp}
+                    <svg viewBox="0 0 24 24" className="h-4 w-4" fill="currentColor" aria-hidden>
+                      <path d="M14 3h7v7h-2V6.41l-9.29 9.3-1.42-1.42 9.3-9.29H14V3z" />
+                      <path d="M5 5h5V3H3v7h2V5z" />
+                    </svg>
+                  </a>
+                  <button
+                    className="text-xs rounded border px-2 py-1 hover:bg-slate-50"
+                    onClick={() => copy(cli.whatsapp!)}
+                    title="Copiar"
+                  >
+                    Copiar
+                  </button>
+                </div>
               ) : (
                 <span className="text-slate-400">—</span>
               )}
@@ -313,7 +361,7 @@ export default function ClienteDetalhes() {
 
             <div className="sm:col-span-2 space-y-1.5">
               <div className="text-xs font-medium text-slate-500">Anotações</div>
-              <p className="text-slate-700 whitespace-pre-line">
+              <p className="whitespace-pre-line text-slate-700">
                 {cli.anotacoes?.trim() ? cli.anotacoes : <span className="text-slate-400">—</span>}
               </p>
             </div>
@@ -322,35 +370,32 @@ export default function ClienteDetalhes() {
           <div className="mt-5 flex flex-wrap gap-2">
             <Link
               to={`/clientes/${cli.id}/editar`}
-              className="px-3 py-2 rounded-xl border bg-white hover:bg-slate-50 transition-colors"
+              className="rounded-xl border bg-white px-3 py-2 transition-colors hover:bg-slate-50"
             >
               Editar dados
             </Link>
             <Link
               to={`/clientes/${cli.id}/documentos`}
-              className="px-3 py-2 rounded-xl bg-violet-600 text-white hover:bg-violet-700 transition-colors"
+              className="rounded-xl bg-violet-600 px-3 py-2 text-white transition-colors hover:bg-violet-700"
             >
               Gerenciar documentos
             </Link>
             <Link
               to={`/blocos?cliente_id=${cli.id}`}
-              className="px-3 py-2 rounded-xl bg-emerald-600 text-white hover:bg-emerald-700 transition-colors"
+              className="rounded-xl bg-emerald-600 px-3 py-2 text-white transition-colors hover:bg-emerald-700"
             >
               Abrir blocos
             </Link>
           </div>
         </div>
 
-        {/* Lateral direita */}
-        <div className="space-y-5">
-          {/* Documentos */}
-          <div className="rounded-2xl border p-4 bg-white shadow-sm">
+        {/* Coluna direita */}
+        <div className="space-y-6">
+          {/* Documentos fiscais */}
+          <div className="rounded-2xl border bg-white p-4 shadow-sm">
             <div className="mb-3 flex items-center justify-between">
               <h3 className="text-sm font-medium text-slate-600">Documentos fiscais</h3>
-              <Link
-                to={`/clientes/${cli.id}/documentos`}
-                className="text-xs px-2 py-1 rounded border hover:bg-slate-50"
-              >
+              <Link to={`/clientes/${cli.id}/documentos`} className="text-xs rounded border px-2 py-1 hover:bg-slate-50">
                 + adicionar / editar
               </Link>
             </div>
@@ -359,30 +404,53 @@ export default function ClienteDetalhes() {
               <table className="w-full text-sm">
                 <thead className="bg-slate-50">
                   <tr>
-                    <th className="p-2 border">Tipo</th>
-                    <th className="p-2 border">Número</th>
-                    <th className="p-2 border">Principal</th>
-                    <th className="p-2 border">% Nota</th>
+                    <th className="border p-2">Tipo</th>
+                    <th className="border p-2">Número</th>
+                    <th className="border p-2">Principal</th>
+                    <th className="border p-2">Modelo</th>
                   </tr>
                 </thead>
                 <tbody>
                   {docsLoading && (
                     <tr>
-                      <td colSpan={4} className="p-3 text-center text-slate-500">Carregando…</td>
+                      <td colSpan={4} className="p-3 text-center text-slate-500">
+                        Carregando…
+                      </td>
                     </tr>
                   )}
                   {!docsLoading && docs.length === 0 && (
                     <tr>
-                      <td colSpan={4} className="p-3 text-center text-slate-400">Nenhum documento</td>
+                      <td colSpan={4} className="p-3 text-center text-slate-400">
+                        Nenhum documento
+                      </td>
                     </tr>
                   )}
                   {!docsLoading &&
                     docs.map((d) => (
                       <tr key={d.id}>
-                        <td className="p-2 border">{d.doc_tipo}</td>
-                        <td className="p-2 border">{d.doc_numero}</td>
-                        <td className="p-2 border">{d.principal ? "Sim" : "Não"}</td>
-                        <td className="p-2 border">{d.modelo_nota ?? "—"}</td>
+                        <td className="border p-2">{d.doc_tipo}</td>
+                        <td className="border p-2">
+                          <button
+                            className="underline decoration-1 underline-offset-2 hover:text-blue-700"
+                            title="Copiar"
+                            onClick={() => copy(d.doc_numero)}
+                          >
+                            {d.doc_numero}
+                          </button>
+                        </td>
+                        <td className="border p-2">
+                          <span
+                            className={
+                              "inline-flex items-center rounded-full px-2 py-0.5 text-[11px] ring-1 " +
+                              (d.principal
+                                ? "bg-emerald-50 text-emerald-700 ring-emerald-200"
+                                : "bg-slate-50 text-slate-600 ring-slate-200")
+                            }
+                          >
+                            {d.principal ? "SIM" : "NÃO"}
+                          </span>
+                        </td>
+                        <td className="border p-2">{d.modelo_nota ?? "—"}</td>
                       </tr>
                     ))}
                 </tbody>
@@ -390,14 +458,19 @@ export default function ClienteDetalhes() {
             </div>
           </div>
 
-          {/* Transportadoras vinculadas */}
-          <div className="rounded-2xl border p-4 bg-white shadow-sm">
+          {/* Transportadoras associadas */}
+          <div className="rounded-2xl border bg-white p-4 shadow-sm">
             <div className="mb-3 flex items-center justify-between">
               <h3 className="text-sm font-medium text-slate-600">Transportadoras associadas</h3>
               <button
                 type="button"
-                onClick={() => { setSelTransp(""); setSelPrincipal(true); setOpenAssoc(true); }}
-                className="text-xs px-2 py-1 rounded border hover:bg-slate-50"
+                onClick={() => {
+                  setSelTransp("");
+                  setSelPrincipal(true);
+                  setFiltroTransp("");
+                  setOpenAssoc(true);
+                }}
+                className="text-xs rounded border px-2 py-1 hover:bg-slate-50"
               >
                 + associar
               </button>
@@ -406,29 +479,41 @@ export default function ClienteDetalhes() {
             {vLoading ? (
               <div className="text-sm text-slate-500">Carregando…</div>
             ) : vErr ? (
-              <div className="text-sm text-red-700">{vErr}</div>
+              <div className="text-sm text-rose-700">{vErr}</div>
             ) : vRows.length === 0 ? (
               <div className="text-sm text-slate-500">Nenhuma transportadora associada.</div>
             ) : (
               <ul className="space-y-2">
                 {vRows.map((r) => (
-                  <li key={r.transportadora_id} className="flex items-center justify-between rounded border px-3 py-2 bg-slate-50/50 text-sm">
+                  <li
+                    key={r.transportadora_id}
+                    className="flex items-center justify-between rounded border bg-slate-50/60 px-3 py-2 text-sm"
+                  >
                     <div className="flex min-w-0 items-center gap-2">
-                      <span className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] ring-1 ${
-                        r.principal ? "bg-amber-50 text-amber-700 ring-amber-200" : "bg-slate-50 text-slate-600 ring-slate-200"
-                      }`}>
+                      <span
+                        className={
+                          "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] ring-1 " +
+                          (r.principal
+                            ? "bg-amber-50 text-amber-700 ring-amber-200"
+                            : "bg-slate-50 text-slate-600 ring-slate-200")
+                        }
+                        title={r.principal ? "Transportadora principal" : "Vínculo"}
+                      >
                         {r.principal ? "PRINCIPAL" : "VÍNCULO"}
                       </span>
                       <div className="truncate">
-                        <div className="font-medium truncate">{nomeTransp(r) || `#${r.transportadora_id}`}</div>
-                        {r.cnpj && <div className="text-xs text-slate-500 truncate">{r.cnpj}</div>}
+                        <div className="truncate font-medium">{nomeTransp(r) || `#${r.transportadora_id}`}</div>
+                        <div className="truncate text-xs text-slate-500">{r.cnpj || r.telefone || "—"}</div>
                       </div>
                     </div>
                     <div className="flex shrink-0 items-center gap-2">
                       {!r.principal && (
                         <button
                           onClick={async () => {
-                            await api.patch(`/clientes/${cli.id}/transportadoras/${r.transportadora_id}`, { principal: true });
+                            await api.patch(
+                              `/clientes/${cli.id}/transportadoras/${r.transportadora_id}`,
+                              { principal: true }
+                            );
                             await loadVinculos();
                           }}
                           className="rounded border px-2 py-1 text-xs hover:bg-slate-50"
@@ -442,7 +527,7 @@ export default function ClienteDetalhes() {
                           await api.delete(`/clientes/${cli.id}/transportadoras/${r.transportadora_id}`);
                           await loadVinculos();
                         }}
-                        className="rounded border px-2 py-1 text-xs text-red-700 hover:bg-red-50"
+                        className="rounded border px-2 py-1 text-xs text-rose-700 hover:bg-rose-50"
                       >
                         Remover
                       </button>
@@ -457,14 +542,35 @@ export default function ClienteDetalhes() {
 
       {/* Modal associar transportadora */}
       {openAssoc && (
-        <div className="fixed inset-0 z-50 grid place-items-center bg-black/30 p-4" onClick={() => !assocSaving && setOpenAssoc(false)}>
-          <div className="w-full max-w-lg rounded-2xl bg-white p-4 shadow-xl" onClick={(e) => e.stopPropagation()}>
+        <div
+          className="fixed inset-0 z-50 grid place-items-center bg-black/30 p-4"
+          onClick={() => !assocSaving && setOpenAssoc(false)}
+        >
+          <div
+            className="w-full max-w-lg rounded-2xl bg-white p-4 shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
             <div className="mb-3 flex items-center justify-between">
               <h4 className="text-base font-semibold">Associar transportadora</h4>
-              <button className="rounded-md border px-2 py-1 text-sm" onClick={() => !assocSaving && setOpenAssoc(false)}>Fechar</button>
+              <button
+                className="rounded-md border px-2 py-1 text-sm"
+                onClick={() => !assocSaving && setOpenAssoc(false)}
+              >
+                Fechar
+              </button>
             </div>
 
             <div className="space-y-3">
+              <div>
+                <label className="text-sm text-slate-600">Buscar</label>
+                <input
+                  className="mt-1 w-full rounded-md border px-3 py-2 focus:outline-none focus:ring-2 focus:ring-blue-200"
+                  placeholder="nome, razão social ou CNPJ…"
+                  value={filtroTransp}
+                  onChange={(e) => setFiltroTransp(e.target.value)}
+                />
+              </div>
+
               <div>
                 <label className="text-sm text-slate-600">Transportadora</label>
                 <select
@@ -473,12 +579,14 @@ export default function ClienteDetalhes() {
                   onChange={(e) => setSelTransp(e.target.value ? Number(e.target.value) : "")}
                 >
                   <option value="">Selecione…</option>
-                  {listaTransp.map((t) => (
-                    <option key={t.id} value={t.id}>{nomeTransp(t)}</option>
+                  {opcoesTranspFiltradas.map((t) => (
+                    <option key={t.id} value={t.id}>
+                      {nomeTransp(t)}
+                    </option>
                   ))}
                 </select>
-                {listaTransp.length === 0 && (
-                  <p className="mt-1 text-xs text-slate-500">Nenhuma transportadora ativa disponível.</p>
+                {opcoesTranspFiltradas.length === 0 && (
+                  <p className="mt-1 text-xs text-slate-500">Nenhuma transportadora ativa encontrada.</p>
                 )}
               </div>
 
@@ -499,7 +607,7 @@ export default function ClienteDetalhes() {
                     if (!selTransp) return;
                     setAssocSaving(true);
                     try {
-                      await api.post(`/clientes/${cli.id}/transportadoras`, {
+                      await api.post(`/clientes/${cli!.id}/transportadoras`, {
                         transportadora_id: selTransp,
                         principal: selPrincipal,
                       });

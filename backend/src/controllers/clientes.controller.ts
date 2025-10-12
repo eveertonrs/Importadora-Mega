@@ -3,9 +3,47 @@ import { z } from "zod";
 import sql from "mssql";
 import { pool } from "../db";
 
+/* ========================= Utils ========================= */
+const onlyDigits = (s: string) => String(s || "").replace(/\D+/g, "");
+
+// map 'tipo_nota' para o que o banco aceita (CHECK: 'MEIA' | 'INTEGRAL')
+const mapTipoNotaDb = (v?: string | null): "MEIA" | "INTEGRAL" => {
+  const s = String(v ?? "").trim().toUpperCase();
+  if (s === "MEIA" || s === "MEIA-ENTRADA" || s === "MEIA ENTRADA") return "MEIA";
+  return "INTEGRAL"; // fallback seguro
+};
+
+const isValidCPF = (cpf: string) => {
+  const s = onlyDigits(cpf);
+  if (s.length !== 11 || /^(\d)\1+$/.test(s)) return false;
+  let sum = 0, rest = 0;
+  for (let i = 1; i <= 9; i++) sum += parseInt(s.substring(i - 1, i)) * (11 - i);
+  rest = (sum * 10) % 11; if (rest >= 10) rest = 0;
+  if (rest !== parseInt(s.substring(9, 10))) return false;
+  sum = 0;
+  for (let i = 1; i <= 10; i++) sum += parseInt(s.substring(i - 1, i)) * (12 - i);
+  rest = (sum * 10) % 11; if (rest >= 10) rest = 0;
+  return rest === parseInt(s.substring(10, 11));
+};
+
+const isValidCNPJ = (cnpj: string) => {
+  const s = onlyDigits(cnpj);
+  if (s.length !== 14 || /^(\d)\1+$/.test(s)) return false;
+  const calc = (arr: number[]) => {
+    let sum = 0;
+    const w = arr.length === 12 ? [5,4,3,2,9,8,7,6,5,4,3,2] : [6,5,4,3,2,9,8,7,6,5,4,3,2];
+    arr.forEach((v, i) => (sum += v * w[i]));
+    const mod = sum % 11;
+    return mod < 2 ? 0 : 11 - mod;
+  };
+  const n = s.split("").map(Number);
+  const d1 = calc(n.slice(0, 12));
+  const d2 = calc(n.slice(0, 12).concat(d1));
+  return d1 === n[12] && d2 === n[13];
+};
+
 /* ========================= LISTAGEM / BUSCA ========================= */
 
-// GET /clientes
 export const getClientes = async (req: Request, res: Response) => {
   const { page = 1, limit = 10, search = "", q = "", status = "", tabelaPreco = "" } = req.query;
 
@@ -65,7 +103,6 @@ export const getClientes = async (req: Request, res: Response) => {
   }
 };
 
-// GET /clientes/:id
 export const getClienteById = async (req: Request, res: Response) => {
   const { id } = req.params;
 
@@ -82,7 +119,7 @@ export const getClienteById = async (req: Request, res: Response) => {
       return res.status(404).json({ message: "Cliente não encontrado" });
     }
 
-    // Saldo "imediato" considerando blocos ABERTOS **ignorando bom_para**
+    // saldo aberto (ignora bom_para)
     const saldoOpenRs = await pool
       .request()
       .input("id", +id)
@@ -102,7 +139,6 @@ export const getClienteById = async (req: Request, res: Response) => {
       `);
     const saldo_aberto = Number(saldoOpenRs.recordset[0]?.saldo_aberto ?? 0);
 
-    // A RECEBER (títulos em ABERTO/PARCIAL)
     const aReceberRs = await pool
       .request()
       .input("id", +id)
@@ -114,7 +150,7 @@ export const getClienteById = async (req: Request, res: Response) => {
       `);
     const a_receber = Number(aReceberRs.recordset[0]?.a_receber ?? 0);
 
-    // se não houver bloco ABERTO, exibe o saldo do último FECHADO (carry-over)
+    // se não há bloco aberto, pega saldo do último fechado
     let saldo_ultimo_fechado = 0;
     if (saldo_aberto === 0) {
       const lastClosed = await pool
@@ -159,7 +195,6 @@ export const getClienteById = async (req: Request, res: Response) => {
   }
 };
 
-/** GET /clientes/:id/saldo  -> { saldo, saldo_aberto, a_receber } */
 export const getClienteSaldo = async (req: Request, res: Response) => {
   const { id } = req.params;
 
@@ -252,7 +287,7 @@ const clienteDocumentoSchema = z.object({
   principal: z.boolean().default(false),
   modelo_nota: z.string().nullish(),
   nome: z.string().nullish(),
-  tipo_nota: z.string().nullish(),
+  tipo_nota: z.string().nullish(), // MEIA | INTEGRAL (ou vazio -> INTEGRAL)
   percentual_nf: z.number().min(0).max(100).nullish(),
 });
 
@@ -399,15 +434,6 @@ export const deleteCliente = async (req: Request, res: Response) => {
 
 /* ========================= DOCUMENTOS / LINKS ========================= */
 
-function toDbNull<T>(v: T | undefined | null): T | null {
-  if (v === undefined || v === null) return null as any;
-  if (typeof v === "string") {
-    const s = v.trim();
-    return (s === "" ? null : (s as unknown as T));
-  }
-  return v as unknown as T;
-}
-
 export const listClienteDocumentos = async (req: Request, res: Response) => {
   const { cliente_id } = req.params;
   try {
@@ -447,34 +473,26 @@ export const listClienteDocumentos = async (req: Request, res: Response) => {
 export const createClienteDocumento = async (req: Request, res: Response) => {
   const { cliente_id } = req.params;
 
-  const linkSchema = z.object({ descricao: z.string().min(1), url: z.string().url() });
-  const linkParse = linkSchema.safeParse(req.body);
-  if (linkParse.success) {
+  // atalho: anexar link
+  const _linkParse = linkSchema.safeParse(req.body);
+  if (_linkParse.success) {
     try {
-      const cli = await pool
-        .request()
-        .input("id", +cliente_id)
+      const cli = await pool.request().input("id", +cliente_id)
         .query("SELECT links_json FROM clientes WHERE id = @id");
       if (cli.recordset.length === 0)
         return res.status(404).json({ message: "Cliente não encontrado" });
 
       let links: Array<{ descricao: string; url: string }> = [];
       const raw = cli.recordset[0].links_json as string | null;
-      if (raw) {
-        try { const parsed = JSON.parse(raw); if (Array.isArray(parsed)) links = parsed; } catch {}
-      }
+      if (raw) { try { const p = JSON.parse(raw); if (Array.isArray(p)) links = p; } catch {} }
+      links.unshift(_linkParse.data);
 
-      links.unshift({ descricao: linkParse.data.descricao, url: linkParse.data.url });
-
-      await pool
-        .request()
+      await pool.request()
         .input("id", +cliente_id)
         .input("links_json", JSON.stringify(links))
-        .query(
-          "UPDATE clientes SET links_json = @links_json, atualizado_em = SYSUTCDATETIME() WHERE id = @id"
-        );
+        .query("UPDATE clientes SET links_json=@links_json, atualizado_em=SYSUTCDATETIME() WHERE id=@id");
 
-      return res.status(201).json({ message: "Link anexado", link: linkParse.data });
+      return res.status(201).json({ message: "Link anexado", link: _linkParse.data });
     } catch (error) {
       console.error("Erro ao anexar link ao cliente:", error);
       return res.status(500).json({ message: "Erro interno no servidor" });
@@ -484,32 +502,56 @@ export const createClienteDocumento = async (req: Request, res: Response) => {
   try {
     const data = clienteDocumentoSchema.parse(req.body);
 
-    const result = await pool
-      .request()
-      .input("cliente_id", +cliente_id)
-      .input("doc_tipo", data.doc_tipo)
-      .input("doc_numero", data.doc_numero)
-      .input("principal", data.principal ?? false)
-      .input("modelo_nota", data.modelo_nota ?? "")
-      .input("nome", data.nome ?? "")
-      .input("tipo_nota", data.tipo_nota ?? "")
-      .input("percentual_nf", toDbNull((data.percentual_nf as any) ?? null))
-      .query(`
-        INSERT INTO cliente_documentos (cliente_id, doc_tipo, doc_numero, principal, modelo_nota, nome, tipo_nota, percentual_nf)
+    // valida doc e normaliza
+    const numero = onlyDigits(data.doc_numero);
+    if (data.doc_tipo === "CPF" && !isValidCPF(numero))
+      return res.status(400).json({ message: "CPF inválido" });
+    if (data.doc_tipo === "CNPJ" && !isValidCNPJ(numero))
+      return res.status(400).json({ message: "CNPJ inválido" });
+
+    const tx = pool.transaction();
+    await tx.begin();
+
+    try {
+      if (data.principal) {
+        await tx.request()
+          .input("cliente_id", sql.Int, +cliente_id)
+          .query("UPDATE cliente_documentos SET principal = 0 WHERE cliente_id = @cliente_id");
+      }
+
+      const reqDb = tx.request()
+        .input("cliente_id", sql.Int, +cliente_id)
+        .input("doc_tipo", sql.VarChar(10), data.doc_tipo)
+        .input("doc_numero", sql.VarChar(32), numero)
+        .input("principal", sql.Bit, !!data.principal)
+        .input("modelo_nota", sql.VarChar(50), String(data.modelo_nota ?? "").trim()) // nunca null
+        .input("nome", sql.VarChar(120), String(data.nome ?? "").trim())               // nunca null
+        .input("tipo_nota", sql.VarChar(10), mapTipoNotaDb(data.tipo_nota))            // MEIA|INTEGRAL
+        .input("percentual_nf", sql.Decimal(5, 2), data.percentual_nf == null ? null : Number(data.percentual_nf));
+
+      const result = await reqDb.query(`
+        INSERT INTO cliente_documentos
+          (cliente_id, doc_tipo, doc_numero, principal, modelo_nota, nome, tipo_nota, percentual_nf)
         OUTPUT INSERTED.*
         VALUES (@cliente_id, @doc_tipo, @doc_numero, @principal, @modelo_nota, @nome, @tipo_nota, @percentual_nf)
       `);
 
-    return res.status(201).json(result.recordset[0]);
-  } catch (error: any) {
+      await tx.commit();
+      return res.status(201).json(result.recordset[0]);
+    } catch (e: any) {
+      await tx.rollback();
+      if (e?.number === 2627 || e?.number === 2601) {
+        return res.status(409).json({ message: "Documento já cadastrado para este cliente" });
+      }
+      console.error("Erro ao criar documento do cliente:", e);
+      return res.status(500).json({ message: "Erro interno no servidor" });
+    }
+  } catch (error) {
     if (error instanceof z.ZodError) {
       return res.status(400).json({
         message: "Erro de validação",
         errors: error.errors.map((e) => ({ path: e.path.join("."), message: e.message })),
       });
-    }
-    if (error?.number === 2627 || error?.number === 2601) {
-      return res.status(409).json({ message: "Documento já cadastrado para este cliente" });
     }
     console.error("Erro ao criar documento do cliente:", error);
     return res.status(500).json({ message: "Erro interno no servidor" });
@@ -522,34 +564,67 @@ export const updateClienteDocumento = async (req: Request, res: Response) => {
     const data = clienteDocumentoSchema.partial().parse(req.body);
 
     const sanitized: Record<string, any> = { ...data };
-    if ("modelo_nota" in sanitized) sanitized.modelo_nota = (sanitized.modelo_nota ?? "") as string;
-    if ("nome" in sanitized) sanitized.nome = (sanitized.nome ?? "") as string;
-    if ("tipo_nota" in sanitized) sanitized.tipo_nota = (sanitized.tipo_nota ?? "") as string;
 
-    const fields = Object.keys(sanitized).map((key) => `${key} = @${key}`).join(", ");
+    if ("doc_numero" in sanitized) sanitized.doc_numero = onlyDigits(String(sanitized.doc_numero ?? ""));
+    if ("modelo_nota" in sanitized) sanitized.modelo_nota = String(sanitized.modelo_nota ?? "").trim();
+    if ("nome" in sanitized) sanitized.nome = String(sanitized.nome ?? "").trim();
+    if ("tipo_nota" in sanitized) sanitized.tipo_nota = mapTipoNotaDb(sanitized.tipo_nota);
+
+    const fields = Object.keys(sanitized).map((k) => `${k} = @${k}`).join(", ");
     if (!fields) return res.status(400).json({ message: "Nenhum campo para atualizar" });
 
-    const request = pool.request().input("id", +id).input("cliente_id", +cliente_id);
-    Object.entries(sanitized).forEach(([key, value]) => request.input(key, value as any));
+    const tx = pool.transaction();
+    await tx.begin();
 
-    const result = await request.query(`
-      UPDATE cliente_documentos
-      SET ${fields}
-      OUTPUT INSERTED.*
-      WHERE id = @id AND cliente_id = @cliente_id
-    `);
+    try {
+      if (sanitized.principal === true) {
+        await tx.request()
+          .input("cliente_id", sql.Int, +cliente_id)
+          .query("UPDATE cliente_documentos SET principal = 0 WHERE cliente_id = @cliente_id");
+      }
 
-    if (result.recordset.length === 0) {
-      return res.status(404).json({ message: "Documento do cliente não encontrado" });
+      const reqDb = tx.request()
+        .input("id", sql.Int, +id)
+        .input("cliente_id", sql.Int, +cliente_id);
+
+      for (const [k, v] of Object.entries(sanitized)) {
+        if (k === "percentual_nf") reqDb.input(k, sql.Decimal(5, 2), v == null ? null : Number(v));
+        else if (k === "principal") reqDb.input(k, sql.Bit, !!v);
+        else if (k === "doc_tipo") reqDb.input(k, sql.VarChar(10), v as string);
+        else if (k === "doc_numero") reqDb.input(k, sql.VarChar(32), v as string);
+        else if (k === "modelo_nota") reqDb.input(k, sql.VarChar(50), v as string);
+        else if (k === "nome") reqDb.input(k, sql.VarChar(120), v as string);
+        else if (k === "tipo_nota") reqDb.input(k, sql.VarChar(10), v as "MEIA" | "INTEGRAL");
+        else reqDb.input(k, v as any);
+      }
+
+      const result = await reqDb.query(`
+        UPDATE cliente_documentos
+        SET ${fields}
+        OUTPUT INSERTED.*
+        WHERE id = @id AND cliente_id = @cliente_id
+      `);
+
+      await tx.commit();
+
+      if (result.recordset.length === 0) {
+        return res.status(404).json({ message: "Documento do cliente não encontrado" });
+      }
+
+      res.json(result.recordset[0]);
+    } catch (e) {
+      await tx.rollback();
+      throw e;
     }
-
-    res.json(result.recordset[0]);
-  } catch (error) {
+  } catch (error: any) {
     if (error instanceof z.ZodError) {
       return res.status(400).json({
         message: "Erro de validação",
         errors: error.errors.map((e) => ({ path: e.path.join("."), message: e.message })),
       });
+    }
+    if (error?.number === 2627 || error?.number === 2601) {
+      return res.status(409).json({ message: "Documento já cadastrado para este cliente" });
     }
     console.error("Erro ao atualizar documento do cliente:", error);
     res.status(500).json({ message: "Erro interno no servidor" });

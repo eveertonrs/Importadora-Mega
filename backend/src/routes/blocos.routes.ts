@@ -12,33 +12,33 @@ import {
   getBlocoById,
   listPedidosDoBloco,
   listLancamentosDoBloco,
+  deleteLancamento,          // ⟵ NOVO
 } from "../controllers/blocos.controller";
 
 const router = Router();
 
-// protege tudo deste módulo
 router.use(protect);
 
-// -------- Blocos (lista / criação / detalhe) --------
+// Blocos
 router.get("/", authorize("admin", "financeiro", "vendedor"), listBlocos);
 router.post("/", authorize("admin", "financeiro"), createBloco);
-
 router.get("/:id", authorize("admin", "financeiro", "vendedor"), getBlocoById);
 
-// -------- Saldos --------
+// Saldos
 router.get("/:id/saldo", authorize("admin", "financeiro", "vendedor"), getBlocoSaldo);
 router.get("/:id/saldos", authorize("admin", "financeiro", "vendedor"), getBlocoSaldos);
 
-// -------- Fechamento --------
+// Fechamento
 router.post("/:id/fechar", authorize("admin", "financeiro"), fecharBloco);
 
-// -------- Pedidos do bloco --------
+// Pedidos
 router.get("/:id/pedidos", authorize("admin", "financeiro", "vendedor"), listPedidosDoBloco);
 router.post("/:id/pedidos", authorize("admin", "financeiro", "vendedor"), addPedidoToBloco);
 router.delete("/:id/pedidos/:pedido_id", authorize("admin", "financeiro"), unlinkPedido);
 
-// -------- Lançamentos do bloco --------
+// Lançamentos
 router.get("/:id/lancamentos", authorize("admin", "financeiro", "vendedor"), listLancamentosDoBloco);
 router.post("/:id/lancamentos", authorize("admin", "financeiro"), addLancamentoToBloco);
+router.delete("/:id/lancamentos/:lanc_id", authorize("admin", "financeiro"), deleteLancamento); // ⟵ NOVO
 
 export default router;

@@ -1,8 +1,6 @@
-// src/components/FinanceiroReceber.tsx
 import { useEffect, useMemo, useState } from "react";
 import { listarTitulos, type Titulo } from "../services/financeiro";
 import BaixaModal from "./financeiro/BaixaModal";
-import NovoTituloModal from "./financeiro/NovoTituloModal";
 import StatusBadge from "./ui/StatusBadge";
 import { ensureClientNames, getClientName } from "../utils/clientNameCache";
 
@@ -47,23 +45,23 @@ export default function FinanceiroReceber() {
   const [rows, setRows] = useState<Titulo[]>([]);
   const [loading, setLoading] = useState(false);
 
-  const [status, setStatus] = useState<"ABERTO" | "PARCIAL" | "all" | "ABERTO,PARCIAL">("ABERTO,PARCIAL");
-  const [tipo, setTipo] = useState<string>("");
+  // FILTROS (apenas os que o sistema usa hoje)
+  const [status, setStatus] = useState<"ABERTO" | "PARCIAL" | "all" | "ABERTO,PARCIAL">(
+    "ABERTO,PARCIAL"
+  );
   const [from, setFrom] = useState<string>("");
   const [to, setTo] = useState<string>("");
   const [q, setQ] = useState("");
 
+  // BAIXA
   const [showBaixa, setShowBaixa] = useState(false);
   const [tituloSel, setTituloSel] = useState<{ id: number; pendente: number } | null>(null);
-  const [openNovo, setOpenNovo] = useState(false);
 
   async function load() {
     setLoading(true);
     try {
-      const statusParam = status === "all" ? undefined : status;
       const resp = await listarTitulos({
-        status: statusParam,
-        tipo: tipo || undefined,
+        status: status === "all" ? undefined : status,
         from: from || undefined,
         to: to || undefined,
         q: q || undefined,
@@ -72,11 +70,10 @@ export default function FinanceiroReceber() {
 
       const list = (resp.data ?? []) as Titulo[];
 
-      // === garantir nome dos clientes ===
+      // garantir nome dos clientes
       const ids = Array.from(new Set(list.map((t) => Number(t.cliente_id)).filter(Boolean)));
       await ensureClientNames(ids);
 
-      // injetar nome resolvido (mantém se backend já mandou)
       setRows(
         list.map((t) => ({
           ...t,
@@ -119,17 +116,12 @@ export default function FinanceiroReceber() {
 
   return (
     <div className="space-y-4">
-      {/* Header + Resumo */}
-      <div className="flex flex-wrap items-center gap-3">
+      {/* Título */}
+      <div className="flex items-center gap-3">
         <h1 className="text-2xl font-semibold tracking-tight">Contas a Receber</h1>
-        <button
-          onClick={() => setOpenNovo(true)}
-          className="ml-auto rounded-xl bg-blue-600 px-4 py-2 text-white shadow-sm hover:bg-blue-700"
-        >
-          Novo título
-        </button>
       </div>
 
+      {/* Resumo */}
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <CardResumo label="A receber" value={money(totalAberto)} tone="rose" />
         <CardResumo label="Vencem hoje" value={money(totalHoje)} tone="amber" />
@@ -137,10 +129,9 @@ export default function FinanceiroReceber() {
         <CardResumo label="Baixado no período" value={money(totalBaixadoPeriodo)} tone="emerald" />
       </div>
 
-      {/* Filtros */}
+      {/* Filtros – simples e direto */}
       <div className="rounded-2xl border bg-white p-3 shadow-sm">
         <div className="flex flex-wrap items-end gap-3">
-          {/* Status chips */}
           <div className="flex items-center gap-1">
             {[
               { v: "ABERTO,PARCIAL", label: "Abertos + Parciais" },
@@ -163,26 +154,24 @@ export default function FinanceiroReceber() {
             ))}
           </div>
 
-          <select
-            className="rounded-lg border px-3 py-2"
-            value={tipo}
-            onChange={(e) => setTipo(e.target.value)}
-            title="Tipo"
-          >
-            <option value="">(todos os tipos)</option>
-            <option value="CHEQUE">CHEQUE</option>
-            <option value="BOLETO">BOLETO</option>
-            <option value="PIX">PIX</option>
-            <option value="DEPOSITO">DEPÓSITO</option>
-          </select>
-
           <label className="text-sm">
             <span className="block text-slate-600">De</span>
-            <input type="date" className="mt-1 rounded-lg border px-3 py-2" value={from} onChange={(e) => setFrom(e.target.value)} />
+            <input
+              type="date"
+              className="mt-1 rounded-lg border px-3 py-2"
+              value={from}
+              onChange={(e) => setFrom(e.target.value)}
+            />
           </label>
+
           <label className="text-sm">
             <span className="block text-slate-600">Até</span>
-            <input type="date" className="mt-1 rounded-lg border px-3 py-2" value={to} onChange={(e) => setTo(e.target.value)} />
+            <input
+              type="date"
+              className="mt-1 rounded-lg border px-3 py-2"
+              value={to}
+              onChange={(e) => setTo(e.target.value)}
+            />
           </label>
 
           <label className="flex-1 text-sm min-w-[220px]">
@@ -195,10 +184,7 @@ export default function FinanceiroReceber() {
             />
           </label>
 
-          <button
-            onClick={load}
-            className="h-10 rounded-lg bg-blue-600 px-4 text-white hover:bg-blue-700"
-          >
+          <button onClick={load} className="h-10 rounded-lg bg-blue-600 px-4 text-white hover:bg-blue-700">
             Aplicar
           </button>
 
@@ -209,7 +195,7 @@ export default function FinanceiroReceber() {
         </div>
       </div>
 
-      {/* Tabela */}
+      {/* Lista de títulos (boletos/cheques/etc.) */}
       <div className="overflow-auto rounded-2xl border bg-white shadow-sm">
         <table className="w-full text-sm">
           <thead className="sticky top-0 bg-slate-50">
@@ -224,7 +210,8 @@ export default function FinanceiroReceber() {
               <th className="p-2 border w-28">Ações</th>
             </tr>
           </thead>
-        <tbody className="[&>tr:nth-child(even)]:bg-slate-50/40">
+
+          <tbody className="[&>tr:nth-child(even)]:bg-slate-50/40">
             {loading && (
               <tr>
                 <td colSpan={8} className="p-6 text-center">
@@ -244,7 +231,7 @@ export default function FinanceiroReceber() {
             {!loading &&
               rows.map((t) => {
                 const pendente = Math.max(0, t.valor_bruto - t.valor_baixado);
-                const name = getClientName(t.cliente_id as any, (t as any).cliente_nome); // <- sempre nome
+                const name = getClientName(t.cliente_id as any, (t as any).cliente_nome);
                 return (
                   <tr key={t.id} className="hover:bg-slate-50">
                     <td className="p-2 border">
@@ -257,21 +244,31 @@ export default function FinanceiroReceber() {
                         </div>
                       </div>
                     </td>
-                    <td className="p-2 border">{t.tipo}</td>
+
+                    <td className="p-2 border">
+                      <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-700">
+                        {t.tipo === "BOLETO" ? "🧾" : t.tipo === "CHEQUE" ? "💳" : "📄"} {t.tipo}
+                      </span>
+                    </td>
+
                     <td className="p-2 border">{t.numero_doc || "—"}</td>
+
                     <td className="p-2 border">
                       <div className="flex items-center gap-2">
                         <span>{t.bom_para ? new Date(t.bom_para).toLocaleDateString() : "—"}</span>
                         {dueBadge(t.bom_para)}
                       </div>
                     </td>
+
                     <td className="p-2 border text-right whitespace-nowrap">{money(t.valor_bruto)}</td>
                     <td className="p-2 border text-right whitespace-nowrap">{money(t.valor_baixado)}</td>
+
                     <td className="p-2 border">
                       <StatusBadge value={t.status} />
                     </td>
+
                     <td className="p-2 border">
-                      {pendente > 0 && (t.status === "ABERTO" || t.status === "PARCIAL") && (
+                      {pendente > 0 && (t.status === "ABERTO" || t.status === "PARCIAL") ? (
                         <button
                           className="w-full rounded-md border px-2 py-1 text-xs hover:bg-slate-50"
                           onClick={() => {
@@ -281,6 +278,8 @@ export default function FinanceiroReceber() {
                         >
                           Baixar
                         </button>
+                      ) : (
+                        <span className="text-slate-400 text-xs">—</span>
                       )}
                     </td>
                   </tr>
@@ -316,8 +315,6 @@ export default function FinanceiroReceber() {
           onDone={load}
         />
       )}
-
-      <NovoTituloModal open={openNovo} onClose={() => setOpenNovo(false)} onDone={load} />
     </div>
   );
 }

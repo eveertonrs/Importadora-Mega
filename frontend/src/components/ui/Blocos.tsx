@@ -4,7 +4,7 @@ import { listarBlocos } from "../../services/blocos.api";
 import api from "../../services/api";
 import type { Bloco, BlocoStatus } from "../../services/blocos.api";
 
-/** debounce simples */
+/** =================== debounce simples =================== */
 function useDebounce<T>(value: T, delay = 400) {
   const [debounced, setDebounced] = useState(value);
   useEffect(() => {
@@ -14,15 +14,17 @@ function useDebounce<T>(value: T, delay = 400) {
   return debounced;
 }
 
+/** =================== tipos locais =================== */
 type Cliente = { id: number; nome_fantasia: string };
 
 type SortKey = "cliente" | "status";
 type SortDir = "asc" | "desc";
 
+/** =================== componente =================== */
 export default function Blocos() {
   const [sp, setSp] = useSearchParams();
 
-  /** ----------------------- Filtros / URL ----------------------- */
+  /** ------------ Filtros / URL ------------ */
   const [clienteNome, setClienteNome] = useState<string>(sp.get("q") ?? "");
   const initialClienteIdParam = sp.get("cliente_id");
   const [clienteId] = useState<number | null>(initialClienteIdParam ? Number(initialClienteIdParam) : null);
@@ -37,7 +39,7 @@ export default function Blocos() {
   const [sortKey, setSortKey] = useState<SortKey>((sp.get("sortKey") as SortKey) || "cliente");
   const [sortDir, setSortDir] = useState<SortDir>((sp.get("sortDir") as SortDir) || "asc");
 
-  /** ----------------------- Dados ----------------------- */
+  /** ------------ Dados ------------ */
   const [rows, setRows] = useState<Bloco[]>([]);
   const [total, setTotal] = useState<number>(0);
 
@@ -45,16 +47,22 @@ export default function Blocos() {
   const [skeleton, setSkeleton] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  /** ----------------------- Modal novo bloco ----------------------- */
+  /** ------------ Modal novo bloco ------------ */
   const [openNew, setOpenNew] = useState(false);
   const [novoClienteNome, setNovoClienteNome] = useState("");
   const [novoClienteId, setNovoClienteId] = useState<number | "">("");
   const [novaObs, setNovaObs] = useState("");
 
+  // feedback do modal
+  const [newErrMsg, setNewErrMsg] = useState<string | undefined>(undefined);
+  const [newErrBlocoId, setNewErrBlocoId] = useState<number | undefined>(undefined);
+
   // auto-complete
   const [cliOpts, setCliOpts] = useState<Cliente[]>([]);
   const [cliOpen, setCliOpen] = useState(false);
   const [cliActiveIndex, setCliActiveIndex] = useState<number>(-1);
+  const [cliLoadingNew, setCliLoadingNew] = useState(false);
+
   const debouncedBuscaCliente = useDebounce(novoClienteNome, 300);
   const cliBoxRef = useRef<HTMLDivElement>(null);
   const inputNewRef = useRef<HTMLInputElement>(null);
@@ -77,9 +85,12 @@ export default function Blocos() {
     if (debouncedBuscaCliente.trim().length < 2 || novoClienteId !== "") {
       setCliOpts([]);
       setCliOpen(false);
+      setCliActiveIndex(-1);
+      setCliLoadingNew(false);
       return;
     }
     let cancel = false;
+    setCliLoadingNew(true);
     (async () => {
       try {
         const { data } = await api.get("/clientes", {
@@ -92,6 +103,8 @@ export default function Blocos() {
         setCliActiveIndex(list.length ? 0 : -1);
       } catch {
         // silencioso
+      } finally {
+        if (!cancel) setCliLoadingNew(false);
       }
     })();
     return () => {
@@ -110,12 +123,14 @@ export default function Blocos() {
     setCliOpts([]);
     setCliOpen(false);
     setCliActiveIndex(-1);
+    setNewErrMsg(undefined);
+    setNewErrBlocoId(undefined);
     inputNewRef.current?.focus();
   }
 
   const debouncedNome = useDebounce(clienteNome, 400);
 
-  /** ----------------------- URL Sync ----------------------- */
+  /** ------------ URL Sync ------------ */
   useEffect(() => {
     const p = new URLSearchParams(sp);
     p.set("q", clienteNome);
@@ -129,7 +144,7 @@ export default function Blocos() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [clienteNome, status, page, limit, sortKey, sortDir]);
 
-  /** ----------------------- Carregar ----------------------- */
+  /** ------------ Carregar ------------ */
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
@@ -175,14 +190,18 @@ export default function Blocos() {
 
   const canNext = page * limit < total;
 
-  /** ----------------------- Abrir bloco ----------------------- */
+  /** ------------ Abrir bloco ------------ */
   async function handleCriarBloco() {
     if (novoClienteId === "") {
-      alert("Selecione um cliente.");
+      setNewErrMsg("Selecione um cliente para abrir o bloco.");
+      setNewErrBlocoId(undefined);
       return;
     }
     try {
       setLoading(true);
+      setNewErrMsg(undefined);
+      setNewErrBlocoId(undefined);
+
       const { data } = await api.post("/blocos", {
         cliente_id: Number(novoClienteId),
         observacao: novaObs || undefined,
@@ -192,13 +211,16 @@ export default function Blocos() {
       setNovaObs("");
       window.location.href = `/blocos/${data?.id ?? data?.data?.id}`;
     } catch (e: any) {
-      alert(e?.response?.data?.message ?? "Falha ao abrir bloco.");
+      const msg = e?.response?.data?.message ?? "Falha ao abrir bloco.";
+      const existente = e?.response?.status === 409 ? Number(e?.response?.data?.bloco_aberto_id) : undefined;
+      setNewErrMsg(msg);
+      setNewErrBlocoId(existente);
     } finally {
       setLoading(false);
     }
   }
 
-  /** ----------------------- Helpers UI ----------------------- */
+  /** ------------ Helpers UI ------------ */
   const totalLabel = useMemo(() => {
     if (!total) return "0 resultado";
     if (total === 1) return "1 resultado";
@@ -220,17 +242,23 @@ export default function Blocos() {
     <span className="ml-1 inline-block select-none align-middle">{dir === "asc" ? "▲" : "▼"}</span>
   );
 
-  /** ----------------------- Render ----------------------- */
+  /** ------------ Render ------------ */
   return (
     <div className="p-6 space-y-6">
       {/* Hero */}
       <div className="rounded-2xl bg-gradient-to-r from-sky-50 via-indigo-50 to-fuchsia-50 border shadow-sm p-5 flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-semibold text-slate-900">Blocos</h1>
-          <p className="text-slate-600 text-sm">Gerencie os blocos por cliente. {totalLabel}.</p>
+          <p className="text-slate-600 text-sm">
+            Gerencie os blocos por cliente. <span className="font-medium">{totalLabel}</span>.
+          </p>
         </div>
         <button
-          onClick={() => setOpenNew(true)}
+          onClick={() => {
+            setOpenNew(true);
+            setNewErrMsg(undefined);
+            setNewErrBlocoId(undefined);
+          }}
           className="px-4 py-2.5 rounded-xl bg-blue-600 text-white hover:bg-blue-700 shadow"
         >
           Abrir novo bloco
@@ -358,7 +386,7 @@ export default function Blocos() {
                     <td className="p-3 border-b">
                       <span
                         className={
-                          "text-[11px] px-2 py-0.5 rounded-full font-medium " +
+                          "text-[11px] px-2 py-0.5 rounded-full font-semibold uppercase tracking-wide " +
                           (b.status === "ABERTO"
                             ? "bg-blue-100 text-blue-700"
                             : "bg-slate-200 text-slate-700")
@@ -387,7 +415,11 @@ export default function Blocos() {
                     <div className="space-y-2">
                       <div className="text-slate-500">Nenhum bloco encontrado com os filtros atuais.</div>
                       <button
-                        onClick={() => setOpenNew(true)}
+                        onClick={() => {
+                          setNewErrMsg(undefined);
+                          setNewErrBlocoId(undefined);
+                          setOpenNew(true);
+                        }}
                         className="inline-flex items-center px-3 py-2 rounded-xl bg-blue-600 text-white hover:bg-blue-700"
                       >
                         Abrir novo bloco
@@ -425,104 +457,169 @@ export default function Blocos() {
         </div>
       </div>
 
-      {/* Modal novo bloco */}
+      {/* Modal novo bloco — versão melhorada */}
       {openNew && (
-        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-2xl p-5 w-full max-w-md shadow-2xl">
-            <div className="mb-4">
-              <h2 className="text-lg font-semibold">Abrir novo bloco</h2>
+        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 p-4" onClick={() => setOpenNew(false)}>
+          <div className="bg-white rounded-2xl w-full max-w-lg shadow-2xl ring-1 ring-slate-200" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-labelledby="novo-bloco-title">
+            <div className="rounded-t-2xl bg-gradient-to-r from-slate-50 to-white px-5 py-4 border-b">
+              <h2 id="novo-bloco-title" className="text-lg font-semibold">Abrir novo bloco</h2>
               <p className="text-slate-500 text-sm">Selecione o cliente e, se quiser, informe uma observação.</p>
             </div>
 
-            <div className="space-y-3" ref={cliBoxRef}>
+            <div className="p-5 space-y-4" ref={cliBoxRef}>
+              {/* erro elegante */}
+              {newErrMsg && (
+                <div className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-800 flex items-start gap-2">
+                  <span className="mt-0.5">⚠️</span>
+                  <div className="flex-1">
+                    <div className="font-medium">{newErrMsg}</div>
+                    {newErrBlocoId && (
+                      <button
+                        type="button"
+                        className="mt-1 text-blue-700 underline underline-offset-2 hover:text-blue-800"
+                        onClick={() => (window.location.href = `/blocos/${newErrBlocoId}`)}
+                      >
+                        Abrir bloco #{newErrBlocoId}
+                      </button>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* cliente + autocomplete */}
               <div className="relative">
                 <label className="block text-xs font-semibold text-slate-700 mb-1">Cliente</label>
-                <input
-                  ref={inputNewRef}
-                  className="border rounded-xl px-3 py-2 w-full pr-24 outline-none focus:ring-2 focus:ring-sky-200"
-                  value={novoClienteNome}
-                  onChange={(e) => {
-                    setNovoClienteNome(e.target.value);
-                    if (novoClienteId !== "") setNovoClienteId("");
-                  }}
-                  onFocus={() => {
-                    if (cliOpts.length > 0) setCliOpen(true);
-                  }}
-                  onKeyDown={(e) => {
-                    if (!cliOpen || cliOpts.length === 0) return;
-                    if (e.key === "ArrowDown") {
-                      e.preventDefault();
-                      setCliActiveIndex((i) => Math.min(cliOpts.length - 1, i + 1));
-                    } else if (e.key === "ArrowUp") {
-                      e.preventDefault();
-                      setCliActiveIndex((i) => Math.max(0, i - 1));
-                    } else if (e.key === "Enter" && cliActiveIndex >= 0) {
-                      e.preventDefault();
-                      selecionarCliente(cliOpts[cliActiveIndex]);
-                    }
-                  }}
-                  placeholder="digite para buscar…"
-                />
-                {(novoClienteId !== "" || novoClienteNome) && (
-                  <button
-                    type="button"
-                    className="absolute right-2 top-8 text-xs px-2 py-1 rounded border bg-white hover:bg-slate-50"
-                    onClick={limparCliente}
-                    title="Limpar"
-                  >
-                    Limpar
-                  </button>
+                <div className="relative">
+                  <input
+                    ref={inputNewRef}
+                    className="peer border rounded-xl px-3 py-2 w-full pr-24 outline-none focus:ring-2 focus:ring-sky-200"
+                    value={novoClienteNome}
+                    onChange={(e) => {
+                      setNovoClienteNome(e.target.value);
+                      if (novoClienteId !== "") setNovoClienteId("");
+                      setNewErrMsg(undefined);
+                      setNewErrBlocoId(undefined);
+                    }}
+                    onFocus={() => {
+                      if (cliOpts.length > 0) setCliOpen(true);
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === "Escape") {
+                        if (cliOpen) { setCliOpen(false); return; }
+                        setOpenNew(false);
+                        return;
+                      }
+                      if (!cliOpen || cliOpts.length === 0) {
+                        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "enter") {
+                          e.preventDefault();
+                          void handleCriarBloco();
+                        }
+                        return;
+                      }
+                      if (e.key === "ArrowDown") {
+                        e.preventDefault();
+                        setCliActiveIndex((i) => Math.min(cliOpts.length - 1, i + 1));
+                      } else if (e.key === "ArrowUp") {
+                        e.preventDefault();
+                        setCliActiveIndex((i) => Math.max(0, i - 1));
+                      } else if (e.key === "Enter" && cliActiveIndex >= 0) {
+                        e.preventDefault();
+                        selecionarCliente(cliOpts[cliActiveIndex]);
+                      }
+                    }}
+                    placeholder="Digite para buscar…"
+                    aria-autocomplete="list"
+                    aria-expanded={cliOpen}
+                    aria-controls="autocomplete-clientes"
+                  />
+                  {(novoClienteId !== "" || novoClienteNome) && (
+                    <button
+                      type="button"
+                      className="absolute right-2 top-1/2 -translate-y-1/2 text-xs px-2 py-1 rounded border bg-white hover:bg-slate-50"
+                      onClick={limparCliente}
+                      title="Limpar"
+                    >
+                      Limpar
+                    </button>
+                  )}
+                </div>
+
+                {novoClienteId !== "" && (
+                  <div className="mt-1 text-xs text-slate-600">
+                    Selecionado:{" "}
+                    <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 font-medium">
+                      <span className="text-slate-500">#</span>{novoClienteId}
+                    </span>
+                  </div>
                 )}
-                {cliOpen && cliOpts.length > 0 && (
-                  <div className="absolute z-10 mt-1 w-full rounded-xl border bg-white shadow-lg max-h-64 overflow-auto">
+
+                {cliOpen && (
+                  <div id="autocomplete-clientes" className="absolute z-10 mt-1 w-full rounded-xl border bg-white shadow-xl max-h-72 overflow-auto" role="listbox">
+                    {cliLoadingNew && (
+                      <div className="px-3 py-2 text-sm text-slate-500">Carregando…</div>
+                    )}
+                    {!cliLoadingNew && cliOpts.length === 0 && (
+                      <div className="px-3 py-2 text-sm text-slate-500">Nenhum cliente encontrado.</div>
+                    )}
                     {cliOpts.map((c, idx) => (
                       <button
                         key={c.id}
                         type="button"
-                        className={
-                          "block w-full text-left px-3 py-2 hover:bg-slate-50 " +
-                          (idx === cliActiveIndex ? "bg-slate-50" : "")
-                        }
+                        role="option"
+                        aria-selected={idx === cliActiveIndex}
+                        className={[
+                          "block w-full text-left px-3 py-2 hover:bg-slate-50",
+                          idx === cliActiveIndex ? "bg-slate-50" : "",
+                        ].join(" ")}
+                        onMouseEnter={() => setCliActiveIndex(idx)}
                         onClick={() => selecionarCliente(c)}
                       >
-                        <div className="font-medium">{c.nome_fantasia}</div>
+                        <div className="font-medium truncate">{c.nome_fantasia}</div>
                         <div className="text-xs text-slate-500">#{c.id}</div>
                       </button>
                     ))}
                   </div>
                 )}
-                {novoClienteId !== "" && (
-                  <div className="text-xs text-slate-600 mt-1">
-                    Selecionado: <b>#{novoClienteId}</b>
-                  </div>
-                )}
               </div>
 
+              {/* observação */}
               <div>
-                <label className="block text-xs font-semibold text-slate-700 mb-1">Observação</label>
-                <input
-                  className="border rounded-xl px-3 py-2 w-full outline-none focus:ring-2 focus:ring-sky-200"
-                  value={novaObs}
-                  onChange={(e) => setNovaObs(e.target.value)}
-                  placeholder="opcional"
-                />
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Observação <span className="text-slate-400 font-normal">(opcional)</span>
+                </label>
+                <div className="relative">
+                  <textarea
+                    className="border rounded-xl px-3 py-2 w-full outline-none focus:ring-2 focus:ring-sky-200 min-h-[84px] resize-y"
+                    value={novaObs}
+                    maxLength={400}
+                    onChange={(e) => setNovaObs(e.target.value)}
+                    placeholder="Ex.: abrir bloco para novos títulos…"
+                  />
+                  <div className="pointer-events-none absolute bottom-2 right-3 text-[11px] text-slate-400">
+                    {novaObs.length}/400
+                  </div>
+                </div>
               </div>
+            </div>
 
-              <div className="flex justify-end gap-2 pt-2">
-                <button
-                  className="px-3 py-2 rounded-xl border hover:bg-slate-50"
-                  onClick={() => setOpenNew(false)}
-                >
-                  Cancelar
-                </button>
-                <button
-                  className="px-3 py-2 rounded-xl bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50"
-                  onClick={handleCriarBloco}
-                  disabled={novoClienteId === "" || loading}
-                >
-                  {loading ? "Abrindo…" : "Abrir"}
-                </button>
-              </div>
+            <div className="flex items-center justify-end gap-2 px-5 py-4 border-t rounded-b-2xl bg-slate-50">
+              <button className="px-3 py-2 rounded-xl border hover:bg-white" onClick={() => setOpenNew(false)}>
+                Cancelar
+              </button>
+              <button
+                className="px-3 py-2 rounded-xl bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50 inline-flex items-center gap-2"
+                onClick={handleCriarBloco}
+                disabled={novoClienteId === "" || loading}
+                title="Ctrl + Enter"
+              >
+                {loading && (
+                  <svg className="h-4 w-4 animate-spin" viewBox="0 0 24 24" fill="none">
+                    <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3" />
+                    <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v4a4 4 0 00-4 4H4z" />
+                  </svg>
+                )}
+                Abrir
+              </button>
             </div>
           </div>
         </div>
