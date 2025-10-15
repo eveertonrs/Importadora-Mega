@@ -196,16 +196,48 @@ export const updateTransportadora = async (req: Request, res: Response) => {
   }
 };
 
+
 export const deleteTransportadora = async (req: Request, res: Response) => {
-  const { id } = req.params;
+  const id = Number(req.params.id);
+  if (!Number.isFinite(id)) {
+    return res.status(400).json({ message: "id inválido" });
+  }
+
+  const tx = pool.transaction();
+  await tx.begin();
+
   try {
-    const rs = await pool.request().input("id", +id).query("DELETE FROM transportadoras WHERE id = @id");
-    if ((rs.rowsAffected?.[0] ?? 0) === 0) {
+    // 1) Remove todos os vínculos de clientes com essa transportadora
+    await tx
+      .request()
+      .input("id", id)
+      .query(
+        `DELETE FROM dbo.cliente_transportadoras
+          WHERE transportadora_id = @id`
+      );
+
+    // 2) Agora pode apagar a transportadora
+    const del = await tx
+      .request()
+      .input("id", id)
+      .query(`DELETE FROM dbo.transportadoras WHERE id = @id`);
+
+    if ((del.rowsAffected?.[0] ?? 0) === 0) {
+      await tx.rollback();
       return res.status(404).json({ message: "Transportadora não encontrada" });
     }
-    res.status(204).send();
-  } catch (error) {
+
+    await tx.commit();
+    return res.status(204).send();
+  } catch (error: any) {
+    await tx.rollback();
     console.error("Erro ao deletar transportadora:", error);
-    res.status(500).json({ message: "Erro interno no servidor" });
+    // se por algum motivo ainda sobrar referência em outra tabela:
+    if (error?.number === 547) {
+      return res
+        .status(409)
+        .json({ message: "Não é possível excluir: existem referências relacionadas." });
+    }
+    return res.status(500).json({ message: "Erro interno no servidor" });
   }
 };
