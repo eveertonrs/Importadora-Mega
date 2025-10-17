@@ -13,6 +13,11 @@ const mapTipoNotaDb = (v?: string | null): "MEIA" | "INTEGRAL" => {
   return "INTEGRAL"; // fallback seguro
 };
 
+// helpers (se já tiver no arquivo, reaproveite)
+const toDbNull = (v?: string | null) =>
+  v === undefined || v === null || (typeof v === "string" && v.trim() === "") ? null : v;
+
+
 const isValidCPF = (cpf: string) => {
   const s = onlyDigits(cpf);
   if (s.length !== 11 || /^(\d)\1+$/.test(s)) return false;
@@ -344,68 +349,191 @@ export const createCliente = async (req: Request, res: Response) => {
   }
 };
 
+// export const updateCliente = async (req: Request, res: Response) => {
+//   const { id } = req.params;
+//   try {
+//     const data = z
+//       .object({
+//         nome_fantasia: z.string().optional(),
+//         grupo_empresa: z.string().nullish().optional(),
+//         tabela_preco: z.string().optional(),
+//         status: z.enum(["ATIVO", "INATIVO"]).optional(),
+//         whatsapp: z.string().nullish().optional(),
+//         anotacoes: z.string().nullish().optional(),
+//         links_json: z.string().nullish().optional(),
+//       })
+//       .partial()
+//       .parse(req.body as any);
+
+//     if ((data as any).nome_fantasia && (data as any).nome_fantasia.trim()) {
+//       const exists = await pool
+//         .request()
+//         .input("id", +id)
+//         .input("nome", (data as any).nome_fantasia.trim())
+//         .query(`SELECT TOP 1 id FROM clientes WHERE nome_fantasia = @nome AND id <> @id`);
+//       if (exists.recordset.length) {
+//         return res.status(409).json({ message: "Já existe outro cliente com este nome." });
+//       }
+//     }
+
+//     const sanitized: Record<string, any> = {};
+//     for (const [key, value] of Object.entries(req.body || {})) {
+//       if (key === "status" && typeof value === "string") {
+//         sanitized.status = value.toUpperCase() === "INATIVO" ? "INATIVO" : "ATIVO";
+//       } else if (["grupo_empresa", "whatsapp", "anotacoes", "links_json"].includes(key)) {
+//         sanitized[key] = value ?? null;
+//       } else {
+//         sanitized[key] = value;
+//       }
+//     }
+
+//     const fields = Object.keys(sanitized).map((k) => `${k} = @${k}`).join(", ");
+//     if (!fields) return res.status(400).json({ message: "Nenhum campo para atualizar" });
+
+//     const request = pool.request().input("id", +id);
+//     Object.entries(sanitized).forEach(([k, v]) => request.input(k, v ?? null));
+
+//     const result = await request.query(`
+//       UPDATE clientes SET ${fields}, atualizado_em = SYSUTCDATETIME()
+//       OUTPUT INSERTED.*
+//       WHERE id = @id
+//     `);
+
+//     if (result.recordset.length === 0)
+//       return res.status(404).json({ message: "Cliente não encontrado" });
+//     res.json({ message: "Cliente atualizado com sucesso!", data: result.recordset[0] });
+//   } catch (error) {
+//     if (error instanceof z.ZodError) {
+//       return res.status(400).json({
+//         message: "Erro de validação",
+//         errors: error.errors.map((e) => ({ path: e.path.join("."), message: e.message })),
+//       });
+//     }
+//     console.error("Erro ao atualizar cliente:", error);
+//     res.status(500).json({ message: "Erro interno no servidor" });
+//   }
+// };
+
+
 export const updateCliente = async (req: Request, res: Response) => {
   const { id } = req.params;
+
   try {
-    const data = z
+    const body = z
       .object({
-        nome_fantasia: z.string().optional(),
-        grupo_empresa: z.string().nullish().optional(),
-        tabela_preco: z.string().optional(),
+        nome_fantasia: z.string().min(1).optional(),
+        grupo_empresa: z.string().trim().nullish().optional(),
+        tabela_preco: z.string().min(1).optional(),
         status: z.enum(["ATIVO", "INATIVO"]).optional(),
-        whatsapp: z.string().nullish().optional(),
+        whatsapp: z.string().trim().nullish().optional(),
         anotacoes: z.string().nullish().optional(),
-        links_json: z.string().nullish().optional(),
+        links_json: z.union([z.string(), z.record(z.any())]).nullish().optional(),
+        recebe_whatsapp: z.boolean().optional(), // BIT no banco
       })
       .partial()
-      .parse(req.body as any);
+      .parse(req.body ?? {});
 
-    if ((data as any).nome_fantasia && (data as any).nome_fantasia.trim()) {
-      const exists = await pool
+    // Checagem de duplicidade do nome_fantasia
+    if (body.nome_fantasia && body.nome_fantasia.trim()) {
+      const dup = await pool
         .request()
         .input("id", +id)
-        .input("nome", (data as any).nome_fantasia.trim())
-        .query(`SELECT TOP 1 id FROM clientes WHERE nome_fantasia = @nome AND id <> @id`);
-      if (exists.recordset.length) {
-        return res.status(409).json({ message: "Já existe outro cliente com este nome." });
+        .input("nome", body.nome_fantasia.trim())
+        .query(
+          `SELECT TOP 1 id FROM clientes WHERE nome_fantasia = @nome AND id <> @id`
+        );
+      if (dup.recordset.length) {
+        return res
+          .status(409)
+          .json({ message: "Já existe outro cliente com este nome." });
       }
     }
 
+    // Monta objeto sanitizado apenas com campos enviados
     const sanitized: Record<string, any> = {};
-    for (const [key, value] of Object.entries(req.body || {})) {
-      if (key === "status" && typeof value === "string") {
-        sanitized.status = value.toUpperCase() === "INATIVO" ? "INATIVO" : "ATIVO";
-      } else if (["grupo_empresa", "whatsapp", "anotacoes", "links_json"].includes(key)) {
-        sanitized[key] = value ?? null;
-      } else {
-        sanitized[key] = value;
-      }
+
+    if (body.nome_fantasia !== undefined) {
+      sanitized.nome_fantasia = body.nome_fantasia.trim();
     }
 
-    const fields = Object.keys(sanitized).map((k) => `${k} = @${k}`).join(", ");
-    if (!fields) return res.status(400).json({ message: "Nenhum campo para atualizar" });
+    if (body.grupo_empresa !== undefined) {
+      sanitized.grupo_empresa =
+        body.grupo_empresa == null || body.grupo_empresa.trim() === ""
+          ? null
+          : body.grupo_empresa.trim();
+    }
 
-    const request = pool.request().input("id", +id);
-    Object.entries(sanitized).forEach(([k, v]) => request.input(k, v ?? null));
+    if (body.tabela_preco !== undefined) {
+      sanitized.tabela_preco = body.tabela_preco;
+    }
 
-    const result = await request.query(`
-      UPDATE clientes SET ${fields}, atualizado_em = SYSUTCDATETIME()
-      OUTPUT INSERTED.*
-      WHERE id = @id
+    if (body.status !== undefined) {
+      sanitized.status = body.status; // "ATIVO" | "INATIVO"
+    }
+
+    if (body.whatsapp !== undefined) {
+      sanitized.whatsapp =
+        body.whatsapp == null || body.whatsapp.trim() === ""
+          ? null
+          : body.whatsapp.replace(/\D+/g, "");
+    }
+
+    if (body.anotacoes !== undefined) {
+      sanitized.anotacoes = body.anotacoes ?? null;
+    }
+
+    if (body.links_json !== undefined) {
+      sanitized.links_json =
+        body.links_json == null
+          ? null
+          : typeof body.links_json === "string"
+          ? body.links_json
+          : JSON.stringify(body.links_json);
+    }
+
+    if ((req.body as any).recebe_whatsapp !== undefined) {
+      sanitized.recebe_whatsapp = (req.body as any).recebe_whatsapp ? 1 : 0;
+    }
+
+    if (Object.keys(sanitized).length === 0) {
+      return res.status(400).json({ message: "Nenhum campo para atualizar" });
+    }
+
+    // Monta UPDATE dinâmico
+    const setSql = Object.keys(sanitized)
+      .map((k) => `${k} = @${k}`)
+      .join(", ");
+
+    const dbReq = pool.request().input("id", +id);
+    Object.entries(sanitized).forEach(([k, v]) => dbReq.input(k, v));
+
+    const result = await dbReq.query(`
+      UPDATE clientes
+         SET ${setSql}, atualizado_em = SYSUTCDATETIME()
+       OUTPUT INSERTED.*
+       WHERE id = @id
     `);
 
-    if (result.recordset.length === 0)
+    if (!result.recordset.length) {
       return res.status(404).json({ message: "Cliente não encontrado" });
-    res.json({ message: "Cliente atualizado com sucesso!", data: result.recordset[0] });
+    }
+
+    return res.json({
+      message: "Cliente atualizado com sucesso!",
+      data: result.recordset[0],
+    });
   } catch (error) {
     if (error instanceof z.ZodError) {
       return res.status(400).json({
         message: "Erro de validação",
-        errors: error.errors.map((e) => ({ path: e.path.join("."), message: e.message })),
+        errors: error.errors.map((e) => ({
+          path: e.path.join("."),
+          message: e.message,
+        })),
       });
     }
     console.error("Erro ao atualizar cliente:", error);
-    res.status(500).json({ message: "Erro interno no servidor" });
+    return res.status(500).json({ message: "Erro interno no servidor" });
   }
 };
 

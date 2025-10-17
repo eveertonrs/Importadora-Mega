@@ -24,6 +24,32 @@ type ParametroItem = {
   exige_tipo_cheque: boolean;      // se true, pede "tipo de cheque"
 };
 
+/* ================= helpers de data ================= */
+function dateBR(value?: string | Date | null) {
+  if (!value) return "—";
+  if (typeof value === "string") {
+    // cobre "YYYY-MM-DD" ou "YYYY-MM-DDTHH:mm[:ss]"
+    const m = value.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (m) return `${m[3]}/${m[2]}/${m[1]}`;
+  }
+  const d = new Date(value);
+  return isNaN(d.getTime()) ? "—" : d.toLocaleDateString("pt-BR");
+}
+
+function dateTimeBR(value?: string | Date | null) {
+  if (!value) return "—";
+  if (typeof value === "string") {
+    const m = value.match(/^(\d{4})-(\d{2})-(\d{2})[T\s](\d{2}):(\d{2})/);
+    if (m) return `${m[3]}/${m[2]}/${m[1]} ${m[4]}:${m[5]}`;
+    const dOnly = value.match(/^(\d{4})-(\d{2})-(\d{2})/);
+    if (dOnly) return `${dOnly[3]}/${dOnly[2]}/${dOnly[1]}`;
+  }
+  const d = new Date(value);
+  return isNaN(d.getTime())
+    ? "—"
+    : d.toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
+}
+
 export default function BlocoDetalhe() {
   const { id } = useParams();
   const nav = useNavigate();
@@ -245,6 +271,14 @@ export default function BlocoDetalhe() {
       ? "from-emerald-50 to-teal-50 text-emerald-700"
       : "from-slate-50 to-slate-50 text-slate-800";
 
+  // classe do select (realça conforme o tipo escolhido)
+  const selectTone =
+    paramSelecionado?.tipo === "ENTRADA"
+      ? "focus:ring-2 ring-red-300"
+      : paramSelecionado?.tipo === "SAIDA"
+      ? "focus:ring-2 ring-emerald-300"
+      : "focus:ring-2 ring-slate-300";
+
   return (
     <div className="space-y-5">
       {/* Header */}
@@ -339,11 +373,14 @@ export default function BlocoDetalhe() {
                 onChange={(e) => setFTipo(e.target.value)}
               >
                 <option value="">(todos)</option>
-                {parametros.map((p) => (
-                  <option key={p.id} value={p.descricao}>
-                    {p.descricao} • {p.tipo === "ENTRADA" ? "Entrada" : "Saída"}
-                  </option>
-                ))}
+                {parametros.map((p) => {
+                  const prefix = p.tipo === "ENTRADA" ? "🔴 ENTRADA" : "🟢 SAÍDA";
+                  return (
+                    <option key={p.id} value={p.descricao}>
+                      {`${prefix} - ${p.descricao}`}
+                    </option>
+                  );
+                })}
               </select>
             </div>
             <button className="px-3 py-2 rounded-xl border hover:bg-slate-50" onClick={loadLancs}>
@@ -359,20 +396,39 @@ export default function BlocoDetalhe() {
               </div>
             )}
             <div className="grid md:grid-cols-6 gap-3">
-              <div className="md:col-span-2">
+              <div className="md:col-span-3">
                 <label className="text-sm text-slate-700">Tipo</label>
-                <select
-                  className="mt-1 border rounded-xl px-3 py-2 w-full"
-                  value={paramSelecionadoId}
-                  onChange={(e) => setParamSelecionadoId(e.target.value ? Number(e.target.value) : "")}
-                  disabled={!podeEditar}
-                >
-                  {parametros.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.descricao} • {p.tipo === "ENTRADA" ? "Entrada" : "Saída"}
-                    </option>
-                  ))}
-                </select>
+                <div className="flex items-center gap-2">
+                  <select
+                    className={["mt-1 border rounded-xl px-3 py-2 w-full", selectTone].join(" ")}
+                    value={paramSelecionadoId}
+                    onChange={(e) => setParamSelecionadoId(e.target.value ? Number(e.target.value) : "")}
+                    disabled={!podeEditar}
+                  >
+                    {parametros.map((p) => {
+                      const prefix = p.tipo === "ENTRADA" ? "🔴 ENTRADA" : "🟢 SAÍDA";
+                      return (
+                        <option key={p.id} value={p.id}>
+                          {`${prefix} - ${p.descricao}`}
+                        </option>
+                      );
+                    })}
+                  </select>
+
+                  {paramSelecionado && (
+                    <span
+                      className={[
+                        "text-[11px] whitespace-nowrap mt-1 rounded-full px-2 py-1 font-medium ring-1",
+                        paramSelecionado.tipo === "ENTRADA"
+                          ? "bg-red-50 text-red-700 ring-red-200"
+                          : "bg-emerald-50 text-emerald-700 ring-emerald-200",
+                      ].join(" ")}
+                      title={paramSelecionado.tipo}
+                    >
+                      {paramSelecionado.tipo}
+                    </span>
+                  )}
+                </div>
               </div>
 
               <div>
@@ -493,8 +549,8 @@ export default function BlocoDetalhe() {
                       <td className="p-2 border">
                         {Number(l.valor).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}
                       </td>
-                      <td className="p-2 border">{String(l.data_lancamento).slice(0, 10)}</td>
-                      <td className="p-2 border">{l.bom_para ? String(l.bom_para).slice(0, 10) : "-"}</td>
+                      <td className="p-2 border">{dateBR(l.data_lancamento)}</td>
+                      <td className="p-2 border">{dateBR(l.bom_para)}</td>
                       <td className="p-2 border">{l.numero_referencia ?? "-"}</td>
                       <td className="p-2 border">
                         {l.criado_por_nome?.trim() || (l.criado_por ? `#${l.criado_por}` : "-")}
@@ -550,11 +606,11 @@ export default function BlocoDetalhe() {
             </div>
             <div>
               <div className="text-xs text-slate-500">Aberto em</div>
-              <div className="font-medium">{b?.aberto_em ? String(b.aberto_em).replace("T", " ").slice(0, 19) : "-"}</div>
+              <div className="font-medium">{dateTimeBR(b?.aberto_em as any)}</div>
             </div>
             <div>
               <div className="text-xs text-slate-500">Fechado em</div>
-              <div className="font-medium">{b?.fechado_em ? String(b.fechado_em).replace("T", " ").slice(0, 19) : "-"}</div>
+              <div className="font-medium">{dateTimeBR(b?.fechado_em as any)}</div>
             </div>
           </div>
         </div>
