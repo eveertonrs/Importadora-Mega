@@ -121,11 +121,11 @@ export const createBloco = async (req: Request, res: Response) => {
         .input("cliente_id", sql.Int, cliente_id)
         .input("codigo", sql.VarChar(50), finalCodigo)
         .input("observacao", sql.VarChar(sql.MAX), observacao ?? null)
-        .query(`
-          INSERT INTO blocos (cliente_id, codigo, observacao, status, aberto_em)
-          OUTPUT INSERTED.*
-          VALUES (@cliente_id, @codigo, @observacao, 'ABERTO', SYSUTCDATETIME())
-        `);
+        .query(
+          `INSERT INTO blocos (cliente_id, codigo, observacao, status, aberto_em)
+           OUTPUT INSERTED.*
+           VALUES (@cliente_id, @codigo, @observacao, 'ABERTO', SYSUTCDATETIME())`
+        );
 
       const novoBloco = result.recordset[0] as {
         id: number;
@@ -134,35 +134,35 @@ export const createBloco = async (req: Request, res: Response) => {
         codigo: string;
       };
 
-      // 2) procura o último bloco FECHADO do cliente
+      // 2) último bloco FECHADO do cliente
       const lastClosed = await tx
         .request()
         .input("cliente_id", sql.Int, cliente_id)
-        .query(`
-          SELECT TOP 1 id
-          FROM blocos
-          WHERE cliente_id = @cliente_id AND status = 'FECHADO'
-          ORDER BY fechado_em DESC, id DESC
-        `);
+        .query(
+          `SELECT TOP 1 id
+           FROM blocos
+           WHERE cliente_id = @cliente_id AND status = 'FECHADO'
+           ORDER BY fechado_em DESC, id DESC`
+        );
 
       if (lastClosed.recordset.length) {
         const blocoFechadoId = Number(lastClosed.recordset[0].id);
 
-        // saldo do bloco fechado (IMEDIATO: ignora bom_para)
+        // saldo imediato do bloco fechado (ignora bom_para)
         const saldoRS = await tx
           .request()
           .input("bid", sql.Int, blocoFechadoId)
-          .query(`
-            SELECT
-              COALESCE(SUM(CASE WHEN sentido='SAIDA'   AND bom_para IS NULL THEN valor ELSE 0 END),0)
-            - COALESCE(SUM(CASE WHEN sentido='ENTRADA' AND bom_para IS NULL THEN valor ELSE 0 END),0) AS saldo
-            FROM bloco_lancamentos
-            WHERE bloco_id = @bid
-          `);
+          .query(
+            `SELECT
+               COALESCE(SUM(CASE WHEN sentido='SAIDA'   AND bom_para IS NULL THEN valor ELSE 0 END),0)
+             - COALESCE(SUM(CASE WHEN sentido='ENTRADA' AND bom_para IS NULL THEN valor ELSE 0 END),0) AS saldo
+             FROM bloco_lancamentos
+             WHERE bloco_id = @bid`
+          );
 
         const saldoAnterior = Number(saldoRS.recordset[0]?.saldo ?? 0);
 
-        // 3) se houver saldo a carregar, cria lançamento "SALDO ANTERIOR" no novo bloco
+        // 3) se houver saldo a carregar, cria "SALDO ANTERIOR" no novo bloco
         if (saldoAnterior !== 0) {
           const sentido = saldoAnterior > 0 ? "SAIDA" : "ENTRADA";
           await tx
@@ -178,14 +178,14 @@ export const createBloco = async (req: Request, res: Response) => {
             .input("observacao", sql.VarChar(sql.MAX), `Saldo anterior do bloco #${blocoFechadoId}`)
             .input("sentido", sql.VarChar(10), sentido)
             .input("criado_por", sql.Int, null)
-            .query(`
-              INSERT INTO bloco_lancamentos
-                (bloco_id, tipo_recebimento, valor, data_lancamento, bom_para, tipo_cheque,
-                 numero_referencia, status, observacao, sentido, criado_por, criado_em)
-              VALUES
-                (@bloco_id, @tipo_recebimento, @valor, @data_lancamento, @bom_para, @tipo_cheque,
-                 @numero_referencia, @status, @observacao, @sentido, @criado_por, SYSUTCDATETIME())
-            `);
+            .query(
+              `INSERT INTO bloco_lancamentos
+                 (bloco_id, tipo_recebimento, valor, data_lancamento, bom_para, tipo_cheque,
+                  numero_referencia, status, observacao, sentido, criado_por, criado_em)
+               VALUES
+                 (@bloco_id, @tipo_recebimento, @valor, @data_lancamento, @bom_para, @tipo_cheque,
+                  @numero_referencia, @status, @observacao, @sentido, @criado_por, SYSUTCDATETIME())`
+            );
         }
       }
 
@@ -207,11 +207,7 @@ export const createBloco = async (req: Request, res: Response) => {
   }
 };
 
-/**
- * (mantido) Vincular pedido ao bloco
- * **Dica:** se você já tem um handler próprio, mantenha o seu;
- * não há mudanças necessárias aqui para o bug relatado.
- */
+/** Vincular pedido ao bloco (mantido) */
 export const addPedidoToBloco = async (_req: Request, res: Response) => {
   return res.status(501).json({ message: "Não alterado aqui. Mantenha seu handler original." });
 };
@@ -219,7 +215,6 @@ export const addPedidoToBloco = async (_req: Request, res: Response) => {
 /**
  * Adiciona lançamento no bloco.
  * Se for SAÍDA + bom_para → cria título em financeiro_titulos.
- * **AQUI** está o ajuste para casar 100% com o SEU schema.
  */
 export const addLancamentoToBloco = async (req: AuthenticatedRequest, res: Response) => {
   const { id: bloco_id } = req.params;
@@ -253,15 +248,16 @@ export const addLancamentoToBloco = async (req: AuthenticatedRequest, res: Respo
     let exigeBomPara = false;
     let exigeTipoCheque = false;
 
+    // 3.1 tenta em pedido_parametros (fonte oficial)
     try {
       const paramRS = await pool
         .request()
         .input("desc", sql.VarChar(120), tipoStr)
-        .query(`
-          SELECT TOP 1 tipo, exige_bom_para, exige_tipo_cheque
-          FROM dbo.pedido_parametros
-          WHERE UPPER(descricao) = @desc AND ativo = 1
-        `);
+        .query(
+          `SELECT TOP 1 tipo, exige_bom_para, exige_tipo_cheque
+           FROM dbo.pedido_parametros
+           WHERE UPPER(descricao) = @desc AND ativo = 1`
+        );
       if (paramRS.recordset.length) {
         const row = paramRS.recordset[0] as any;
         sentido = String(row.tipo || "").toUpperCase() === "SAIDA" ? "SAIDA" : "ENTRADA";
@@ -270,32 +266,24 @@ export const addLancamentoToBloco = async (req: AuthenticatedRequest, res: Respo
       }
     } catch {}
 
+    // 3.2 Fallback explícito
     if (!sentido) {
-      try {
-        const alt = await pool
-          .request()
-          .input("desc", sql.VarChar(120), tipoStr)
-          .query(`
-            SELECT TOP 1 tipo, exige_bom_para, exige_tipo_cheque
-            FROM dbo.bloco_lancamentos
-            WHERE UPPER(descricao) = @desc AND ativo = 1
-          `);
-        if (alt.recordset.length) {
-          const row = alt.recordset[0] as any;
-          sentido = String(row.tipo || "").toUpperCase() === "SAIDA" ? "SAIDA" : "ENTRADA";
-          exigeBomPara = !!row.exige_bom_para;
-          exigeTipoCheque = !!row.exige_tipo_cheque;
-        }
-      } catch {}
+      const tiposSaidaComBomPara = new Set(["CHEQUE", "BOLETO"]);
+      if (tiposSaidaComBomPara.has(tipoStr)) {
+        sentido = "SAIDA";
+        exigeBomPara = true;
+        exigeTipoCheque = tipoStr === "CHEQUE";
+      }
     }
 
+    // 3.3 Último fallback (sistêmicos)
     if (!sentido) {
       if ((TIPOS_SISTEMICOS as ReadonlyArray<string>).includes(tipoStr)) {
         sentido = sentidoBySistemico(tipoStr as TipoSistemico);
       } else {
         return res.status(400).json({
           message:
-            "Tipo inválido. Cadastre em 'Parâmetros do pedido' (com tipo/flags) ou use um tipo padrão reconhecido.",
+            "Tipo inválido. Cadastre em 'Parâmetros do pedido' (com tipo/flags) ou use um tipo padrão reconhecido (CHEQUE/BOLETO/etc).",
         });
       }
     }
@@ -304,8 +292,9 @@ export const addLancamentoToBloco = async (req: AuthenticatedRequest, res: Respo
     if (exigeTipoCheque && !raw.tipo_cheque) return res.status(400).json({ message: "Informe 'tipo_cheque'." });
 
     const tipoCheque = exigeTipoCheque ? (raw.tipo_cheque ?? null) : null;
-    const userId = req.user?.id ?? 0; // seu schema exige created_by NOT NULL
+    const userId = req.user?.id ?? 0;
 
+    // 4) insere lançamento no bloco
     const insertLanc = await pool
       .request()
       .input("bloco_id", sql.Int, +bloco_id)
@@ -319,47 +308,91 @@ export const addLancamentoToBloco = async (req: AuthenticatedRequest, res: Respo
       .input("observacao", sql.VarChar(sql.MAX), raw.observacao ?? null)
       .input("sentido", sql.VarChar(10), sentido)
       .input("criado_por", sql.Int, userId)
-      .query(`
-        INSERT INTO bloco_lancamentos
-          (bloco_id, tipo_recebimento, valor, data_lancamento, bom_para, tipo_cheque,
-           numero_referencia, status, observacao, sentido, criado_por, criado_em)
-        OUTPUT INSERTED.*
-        VALUES
-          (@bloco_id, @tipo_recebimento, @valor, @data_lancamento, @bom_para, @tipo_cheque,
-           @numero_referencia, @status, @observacao, @sentido, @criado_por, SYSUTCDATETIME())
-      `);
+      .query(
+        `INSERT INTO bloco_lancamentos
+           (bloco_id, tipo_recebimento, valor, data_lancamento, bom_para, tipo_cheque,
+            numero_referencia, status, observacao, sentido, criado_por, criado_em)
+         OUTPUT INSERTED.*
+         VALUES
+           (@bloco_id, @tipo_recebimento, @valor, @data_lancamento, @bom_para, @tipo_cheque,
+            @numero_referencia, @status, @observacao, @sentido, @criado_por, SYSUTCDATETIME())`
+      );
 
     const lanc = insertLanc.recordset[0];
 
-    // se SAÍDA com “bom para” -> cria título no Contas a Receber
+    // 5) SAÍDA + bom_para => cria Título no Financeiro
     if (sentido === "SAIDA" && bomParaISO) {
       try {
-        await pool
-          .request()
-          .input("cliente_id", sql.Int, clienteIdDoBloco)
-          .input("tipo", sql.VarChar(20), tipoStr)
-          .input("forma_id", sql.Int, null)
-          .input("numero_doc", sql.VarChar(80), raw.numero_referencia ?? null)
-          .input("banco", sql.VarChar(40), null)
-          .input("agencia", sql.VarChar(20), null)
-          .input("conta", sql.VarChar(30), null)
-          .input("bom_para", sql.Date, new Date(bomParaISO))
-          .input("valor_bruto", sql.Decimal(18, 2), valor)
-          .input("valor_baixado", sql.Decimal(18, 2), 0)
-          .input("status", sql.VarChar(20), "ABERTO")
-          .input("observacao", sql.VarChar(400), raw.observacao ?? null)
-          .input("bloco_id", sql.Int, +bloco_id)
-          .input("created_by", sql.Int, userId)
-          .query(`
-            INSERT INTO dbo.financeiro_titulos
-              (cliente_id, tipo, forma_id, numero_doc, banco, agencia, conta, bom_para,
-               valor_bruto, valor_baixado, status, observacao, bloco_id, created_by, created_at)
-            VALUES
-              (@cliente_id, @tipo, @forma_id, @numero_doc, @banco, @agencia, @conta, @bom_para,
-               @valor_bruto, @valor_baixado, @status, @observacao, @bloco_id, @created_by, SYSUTCDATETIME());
-          `);
+        // tentativa com bloco_lanc_id (bancos novos)
+        try {
+          const insTit = await pool
+            .request()
+            .input("cliente_id", sql.Int, clienteIdDoBloco)
+            .input("tipo", sql.VarChar(20), tipoStr)
+            .input("forma_id", sql.Int, null)
+            .input("numero_doc", sql.VarChar(80), raw.numero_referencia ?? null)
+            .input("banco", sql.VarChar(40), null)
+            .input("agencia", sql.VarChar(20), null)
+            .input("conta", sql.VarChar(30), null)
+            .input("bom_para", sql.DateTime2, bomParaISO)
+            .input("valor_bruto", sql.Decimal(18, 2), valor)
+            .input("valor_baixado", sql.Decimal(18, 2), 0)
+            .input("status", sql.VarChar(20), "ABERTO")
+            .input("observacao", sql.VarChar(400), raw.observacao ?? null)
+            .input("bloco_id", sql.Int, +bloco_id)
+            .input("bloco_lanc_id", sql.Int, Number(lanc.id) || null)
+            .input("created_by", sql.Int, userId)
+            .query(
+              `INSERT INTO dbo.financeiro_titulos
+                 (cliente_id, tipo, forma_id, numero_doc, banco, agencia, conta, bom_para,
+                  valor_bruto, valor_baixado, status, observacao, bloco_id, bloco_lanc_id,
+                  created_by, created_at)
+               OUTPUT INSERTED.id
+               VALUES
+                 (@cliente_id, @tipo, @forma_id, @numero_doc, @banco, @agencia, @conta, @bom_para,
+                  @valor_bruto, @valor_baixado, @status, @observacao, @bloco_id, @bloco_lanc_id,
+                  @created_by, SYSUTCDATETIME());`
+            );
+          (lanc as any).titulo_id = insTit.recordset[0]?.id ?? null;
+        } catch (err: any) {
+          // fallback: banco antigo (sem bloco_lanc_id)
+          const msg = String(err?.message || "");
+          const number = (err?.number ?? err?.originalError?.number) as number | undefined;
+          const invalidColumn =
+            number === 207 || /Invalid column name/i.test(msg) || /bloco_lanc_id/i.test(msg);
+
+          if (!invalidColumn) throw err;
+
+          const insTit2 = await pool
+            .request()
+            .input("cliente_id", sql.Int, clienteIdDoBloco)
+            .input("tipo", sql.VarChar(20), tipoStr)
+            .input("forma_id", sql.Int, null)
+            .input("numero_doc", sql.VarChar(80), raw.numero_referencia ?? null)
+            .input("banco", sql.VarChar(40), null)
+            .input("agencia", sql.VarChar(20), null)
+            .input("conta", sql.VarChar(30), null)
+            .input("bom_para", sql.DateTime2, bomParaISO)
+            .input("valor_bruto", sql.Decimal(18, 2), valor)
+            .input("valor_baixado", sql.Decimal(18, 2), 0)
+            .input("status", sql.VarChar(20), "ABERTO")
+            .input("observacao", sql.VarChar(400), raw.observacao ?? null)
+            .input("bloco_id", sql.Int, +bloco_id)
+            .input("created_by", sql.Int, userId)
+            .query(
+              `INSERT INTO dbo.financeiro_titulos
+                 (cliente_id, tipo, forma_id, numero_doc, banco, agencia, conta, bom_para,
+                  valor_bruto, valor_baixado, status, observacao, bloco_id, created_by, created_at)
+               OUTPUT INSERTED.id
+               VALUES
+                 (@cliente_id, @tipo, @forma_id, @numero_doc, @banco, @agencia, @conta, @bom_para,
+                  @valor_bruto, @valor_baixado, @status, @observacao, @bloco_id, @created_by, SYSUTCDATETIME());`
+            );
+          (lanc as any).titulo_id = insTit2.recordset[0]?.id ?? null;
+        }
       } catch (e) {
         console.error("Falha ao criar título financeiro (financeiro_titulos):", e);
+        // não falha o endpoint; o lançamento do bloco foi criado
       }
     }
 
@@ -380,14 +413,14 @@ export const getBlocoSaldo = async (req: Request, res: Response) => {
     const rs = await pool
       .request()
       .input("bloco_id", sql.Int, +id)
-      .query(`
-        SELECT
-          @bloco_id AS bloco_id,
-          COALESCE(SUM(CASE WHEN sentido = 'SAIDA'   THEN valor ELSE 0 END), 0)
-        - COALESCE(SUM(CASE WHEN sentido = 'ENTRADA' THEN valor ELSE 0 END), 0) AS saldo
-        FROM bloco_lancamentos
-        WHERE bloco_id = @bloco_id
-      `);
+      .query(
+        `SELECT
+           @bloco_id AS bloco_id,
+           COALESCE(SUM(CASE WHEN sentido = 'SAIDA'   THEN valor ELSE 0 END), 0)
+         - COALESCE(SUM(CASE WHEN sentido = 'ENTRADA' THEN valor ELSE 0 END), 0) AS saldo
+         FROM bloco_lancamentos
+         WHERE bloco_id = @bloco_id`
+      );
 
     const exists = await pool.request()
       .input("bloco_id", sql.Int, +id)
@@ -404,7 +437,11 @@ export const getBlocoSaldo = async (req: Request, res: Response) => {
 };
 
 /**
- * Saldo novo: ignora “bom para” no saldo normal + soma A Receber dos títulos do bloco
+ * Saldos novos:
+ * - saldo_bloco      = TODAS as movimentações (inclui bom_para) → SAÍDA - ENTRADA
+ * - saldo_imediato   = SOMENTE movimentações imediatas (bom_para IS NULL)
+ * - a_receber        = Σ (valor_bruto - valor_baixado) dos títulos ABERTO/PARCIAL do bloco
+ * - saldo_financeiro = saldo_imediato + Σ valor_baixado de títulos do bloco
  */
 export const getBlocoSaldos = async (req: Request, res: Response) => {
   const { id } = req.params;
@@ -416,30 +453,59 @@ export const getBlocoSaldos = async (req: Request, res: Response) => {
       return res.status(404).json({ message: "Bloco não encontrado" });
     }
 
-    const saldoRS = await pool
+    // saldo do bloco (todas as movimentações)
+    const saldoBlocoRS = await pool
       .request()
       .input("bloco_id", sql.Int, +id)
-      .query(`
-        SELECT
-          COALESCE(SUM(CASE WHEN sentido='SAIDA'   AND bom_para IS NULL THEN valor ELSE 0 END),0)
-        - COALESCE(SUM(CASE WHEN sentido='ENTRADA' AND bom_para IS NULL THEN valor ELSE 0 END),0) AS saldo
-        FROM bloco_lancamentos
-        WHERE bloco_id = @bloco_id
-      `);
-    const saldo = Number(saldoRS.recordset[0]?.saldo ?? 0);
+      .query(
+        `SELECT
+           COALESCE(SUM(CASE WHEN sentido='SAIDA'   THEN valor ELSE 0 END),0)
+         - COALESCE(SUM(CASE WHEN sentido='ENTRADA' THEN valor ELSE 0 END),0) AS saldo_bloco
+         FROM bloco_lancamentos
+         WHERE bloco_id = @bloco_id`
+      );
+    const saldo_bloco = Number(saldoBlocoRS.recordset[0]?.saldo_bloco ?? 0);
 
+    // saldo imediato (ignora bom_para)
+    const saldoImediatoRS = await pool
+      .request()
+      .input("bloco_id", sql.Int, +id)
+      .query(
+        `SELECT
+           COALESCE(SUM(CASE WHEN sentido='SAIDA'   AND bom_para IS NULL THEN valor ELSE 0 END),0)
+         - COALESCE(SUM(CASE WHEN sentido='ENTRADA' AND bom_para IS NULL THEN valor ELSE 0 END),0) AS saldo_imediato
+         FROM bloco_lancamentos
+         WHERE bloco_id = @bloco_id`
+      );
+    const saldo_imediato = Number(saldoImediatoRS.recordset[0]?.saldo_imediato ?? 0);
+
+    // a receber (títulos do bloco)
     const aRecRS = await pool
       .request()
       .input("bloco_id", sql.Int, +id)
-      .query(`
-        SELECT COALESCE(SUM(valor_bruto - valor_baixado), 0) AS a_receber
-        FROM dbo.financeiro_titulos
-        WHERE bloco_id = @bloco_id
-          AND status IN ('ABERTO','PARCIAL')
-      `);
+      .query(
+        `SELECT COALESCE(SUM(valor_bruto - valor_baixado), 0) AS a_receber
+         FROM dbo.financeiro_titulos
+         WHERE bloco_id = @bloco_id
+           AND status IN ('ABERTO','PARCIAL')`
+      );
     const a_receber = Number(aRecRS.recordset[0]?.a_receber ?? 0);
 
-    res.json({ bloco_id: Number(id), saldo, a_receber });
+    // títulos baixados (somatório do que entrou via baixa)
+    const baixadosRS = await pool
+      .request()
+      .input("bloco_id", sql.Int, +id)
+      .query(
+        `SELECT COALESCE(SUM(valor_baixado), 0) AS total_baixado
+         FROM dbo.financeiro_titulos
+         WHERE bloco_id = @bloco_id
+           AND valor_baixado > 0`
+      );
+    const total_baixado = Number(baixadosRS.recordset[0]?.total_baixado ?? 0);
+
+    const saldo_financeiro = saldo_imediato + total_baixado;
+
+    res.json({ bloco_id: Number(id), saldo_bloco, saldo_imediato, a_receber, saldo_financeiro });
   } catch (error) {
     console.error("Erro em getBlocoSaldos:", error);
     res.status(500).json({ message: "Erro interno no servidor" });
@@ -449,41 +515,38 @@ export const getBlocoSaldos = async (req: Request, res: Response) => {
 export const fecharBloco = async (req: Request, res: Response) => {
   const { id } = req.params;
   try {
-    // saldo (imediato) no momento do fechamento
+    // saldo imediato no fechamento (informativo)
     const saldoRS = await pool
       .request()
       .input("bloco_id", sql.Int, +id)
-      .query(`
-        SELECT b.id, b.cliente_id,
+      .query(
+        `SELECT b.id, b.cliente_id,
           (
             COALESCE((SELECT SUM(valor) FROM bloco_lancamentos WHERE bloco_id = b.id AND sentido = 'SAIDA'   AND bom_para IS NULL), 0)
             -
             COALESCE((SELECT SUM(valor) FROM bloco_lancamentos WHERE bloco_id = b.id AND sentido = 'ENTRADA' AND bom_para IS NULL), 0)
           ) AS saldo
         FROM blocos b
-        WHERE b.id = @bloco_id
-      `);
+        WHERE b.id = @bloco_id`
+      );
 
     if (!saldoRS.recordset.length) return res.status(404).json({ message: "Bloco não encontrado" });
-
-    const row = saldoRS.recordset[0] as { id: number; cliente_id: number; saldo: number | null };
-    const saldo = Number(row.saldo ?? 0);
 
     const result = await pool
       .request()
       .input("id", sql.Int, +id)
-      .query(`
-        UPDATE blocos
-        SET status = 'FECHADO', fechado_em = SYSUTCDATETIME()
-        OUTPUT INSERTED.*
-        WHERE id = @id AND status = 'ABERTO'
-      `);
+      .query(
+        `UPDATE blocos
+         SET status = 'FECHADO', fechado_em = SYSUTCDATETIME()
+         OUTPUT INSERTED.*
+         WHERE id = @id AND status = 'ABERTO'`
+      );
 
     if (!result.recordset.length) {
       return res.status(404).json({ message: "Bloco não encontrado ou já está fechado" });
     }
 
-    res.json({ ...result.recordset[0], saldo_no_fechamento: saldo });
+    res.json({ ...result.recordset[0] });
   } catch (error) {
     console.error("Erro ao fechar bloco:", error);
     res.status(500).json({ message: "Erro interno no servidor" });
@@ -521,12 +584,12 @@ export const listBlocos = async (req: Request, res: Response) => {
     if (cliente) totalReq.input("cliente", cliente);
     if (search) totalReq.input("search", search);
 
-    const totalRs = await totalReq.query(`
-      SELECT COUNT(*) AS total
-      FROM blocos b
-      LEFT JOIN clientes c ON c.id = b.cliente_id
-      ${whereSql}
-    `);
+    const totalRs = await totalReq.query(
+      `SELECT COUNT(*) AS total
+       FROM blocos b
+       LEFT JOIN clientes c ON c.id = b.cliente_id
+       ${whereSql}`
+    );
     const total = Number(totalRs.recordset[0]?.total ?? 0);
 
     const pageReq = pool.request().input("limit", limit).input("offset", offset);
@@ -535,16 +598,16 @@ export const listBlocos = async (req: Request, res: Response) => {
     if (cliente) pageReq.input("cliente", cliente);
     if (search) pageReq.input("search", search);
 
-    const rs = await pageReq.query(`
-      SELECT
-        b.id, b.codigo, b.status, b.cliente_id, c.nome_fantasia AS cliente_nome,
-        b.aberto_em, b.fechado_em, b.observacao
-      FROM blocos b
-      LEFT JOIN clientes c ON c.id = b.cliente_id
-      ${whereSql}
-      ORDER BY b.id DESC
-      OFFSET @offset ROWS FETCH NEXT @limit ROWS ONLY;
-    `);
+    const rs = await pageReq.query(
+      `SELECT
+         b.id, b.codigo, b.status, b.cliente_id, c.nome_fantasia AS cliente_nome,
+         b.aberto_em, b.fechado_em, b.observacao
+       FROM blocos b
+       LEFT JOIN clientes c ON c.id = b.cliente_id
+       ${whereSql}
+       ORDER BY b.id DESC
+       OFFSET @offset ROWS FETCH NEXT @limit ROWS ONLY;`
+    );
 
     return res.json({ data: rs.recordset, page, limit, total });
   } catch (err) {
@@ -560,14 +623,14 @@ export const getBlocoById = async (req: Request, res: Response) => {
     const rs = await pool
       .request()
       .input("id", bloco_id)
-      .query(`
-        SELECT
-          b.id, b.codigo, b.status, b.cliente_id, c.nome_fantasia AS cliente_nome,
-          b.aberto_em, b.fechado_em, b.observacao
-        FROM blocos b
-        LEFT JOIN clientes c ON c.id = b.cliente_id
-        WHERE b.id = @id
-      `);
+      .query(
+        `SELECT
+           b.id, b.codigo, b.status, b.cliente_id, c.nome_fantasia AS cliente_nome,
+           b.aberto_em, b.fechado_em, b.observacao
+         FROM blocos b
+         LEFT JOIN clientes c ON c.id = b.cliente_id
+         WHERE b.id = @id`
+      );
 
     if (!rs.recordset.length) {
       return res.status(404).json({ message: "Bloco não encontrado" });
@@ -598,11 +661,11 @@ export const listLancamentosDoBloco = async (req: Request, res: Response) => {
     if (tipo)   { where.push("l.tipo_recebimento = @tipo"); reqDb.input("tipo", tipo.toUpperCase()); }
     const whereSql = `WHERE ${where.join(" AND ")}`;
 
-    const totalRs = await reqDb.query(`
-      SELECT COUNT(*) AS total
-      FROM bloco_lancamentos l
-      ${whereSql}
-    `);
+    const totalRs = await reqDb.query(
+      `SELECT COUNT(*) AS total
+       FROM bloco_lancamentos l
+       ${whereSql}`
+    );
     const total = Number(totalRs.recordset[0]?.total ?? 0);
 
     const pageReq = pool
@@ -611,19 +674,19 @@ export const listLancamentosDoBloco = async (req: Request, res: Response) => {
     if (status) pageReq.input("status", status);
     if (tipo) pageReq.input("tipo", tipo.toUpperCase());
 
-    const rs = await pageReq.query(`
-    SELECT
-      l.id, l.bloco_id, l.tipo_recebimento, l.sentido, l.valor,
-      l.data_lancamento, l.bom_para, l.tipo_cheque, l.numero_referencia,
-      l.status, l.observacao, l.criado_por, l.criado_em,
-      l.referencia_pedido_id, l.referencia_lancamento_id,
-      u.nome AS criado_por_nome
-    FROM bloco_lancamentos l
-    LEFT JOIN dbo.usuarios u ON u.id = l.criado_por
-    ${whereSql}
-    ORDER BY l.id DESC
-    OFFSET @offset ROWS FETCH NEXT @limit ROWS ONLY
-  `);
+    const rs = await pageReq.query(
+      `SELECT
+         l.id, l.bloco_id, l.tipo_recebimento, l.sentido, l.valor,
+         l.data_lancamento, l.bom_para, l.tipo_cheque, l.numero_referencia,
+         l.status, l.observacao, l.criado_por, l.criado_em,
+         l.referencia_pedido_id, l.referencia_lancamento_id,
+         u.nome AS criado_por_nome
+       FROM bloco_lancamentos l
+       LEFT JOIN dbo.usuarios u ON u.id = l.criado_por
+       ${whereSql}
+       ORDER BY l.id DESC
+       OFFSET @offset ROWS FETCH NEXT @limit ROWS ONLY`
+    );
 
     return res.json({ data: rs.recordset, page, limit, total });
   } catch (err) {
@@ -632,9 +695,7 @@ export const listLancamentosDoBloco = async (req: Request, res: Response) => {
   }
 };
 
-/* === Excluir lançamento do bloco (seguro) ===
-   - Só permite se o BLOCO estiver ABERTO.
-   - Se o lançamento tiver 'bom_para' (geraria/gerou Título "a receber"), bloqueia a exclusão. */
+/* Excluir lançamento: ver regras no comentário */
 export const deleteLancamento = async (req: Request, res: Response) => {
   const bloco_id = +req.params.id;
   const lanc_id = +req.params.lanc_id;
@@ -654,11 +715,11 @@ export const deleteLancamento = async (req: Request, res: Response) => {
     const lancRS = await pool.request()
       .input("id", sql.Int, lanc_id)
       .input("bloco_id", sql.Int, bloco_id)
-      .query(`
-        SELECT id, bloco_id, bom_para
-        FROM bloco_lancamentos
-        WHERE id = @id AND bloco_id = @bloco_id
-      `);
+      .query(
+        `SELECT id, bloco_id, bom_para
+         FROM bloco_lancamentos
+         WHERE id = @id AND bloco_id = @bloco_id`
+      );
     if (!lancRS.recordset.length) return res.status(404).json({ message: "Lançamento não encontrado" });
 
     const bom_para = lancRS.recordset[0].bom_para as Date | null;

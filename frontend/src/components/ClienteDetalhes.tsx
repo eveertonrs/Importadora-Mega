@@ -1,4 +1,3 @@
-// src/pages/ClienteDetalhes.tsx
 import { useEffect, useMemo, useState } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import api from "../services/api";
@@ -19,7 +18,9 @@ type Doc = {
   doc_tipo: "CNPJ" | "CPF" | string;
   doc_numero: string;
   principal?: boolean;
-  modelo_nota?: string | null;
+  // modelo_nota removido da UI
+  percentual_nf?: number | null;
+  tipo_nota?: "MEIA" | "INTEGRAL";
 };
 
 type TranspVinculada = {
@@ -52,9 +53,35 @@ const copy = async (s: string) => {
   try {
     await navigator.clipboard.writeText(s);
   } catch {
-    // silencioso
+    /* ignore */
   }
 };
+
+const toneOf = (v: number) => {
+  if ((v ?? 0) > 0) return "from-emerald-50 to-emerald-100 ring-emerald-200 text-emerald-800";
+  if ((v ?? 0) < 0) return "from-rose-50 to-rose-100 ring-rose-200 text-rose-800";
+  return "from-slate-50 to-white ring-slate-200 text-slate-700";
+};
+
+// máscaras rápidas para exibição
+const onlyDigits = (s: string) => (s || "").replace(/\D/g, "");
+const formatCpf = (v: string) => {
+  const d = onlyDigits(v).slice(0, 11);
+  return d
+    .replace(/^(\d{3})(\d)/, "$1.$2")
+    .replace(/^(\d{3})\.(\d{3})(\d)/, "$1.$2.$3")
+    .replace(/\.(\d{3})(\d)/, ".$1-$2");
+};
+const formatCnpj = (v: string) => {
+  const d = onlyDigits(v).slice(0, 14);
+  return d
+    .replace(/^(\d{2})(\d)/, "$1.$2")
+    .replace(/^(\d{2})\.(\d{3})(\d)/, "$1.$2.$3")
+    .replace(/\.(\d{3})(\d)/, ".$1/$2")
+    .replace(/(\d{4})(\d)/, "$1-$2");
+};
+const formatDoc = (tipo?: string, num?: string) =>
+  !num ? "—" : tipo === "CPF" ? formatCpf(num) : tipo === "CNPJ" ? formatCnpj(num) : num;
 
 /* ===================== Componente ===================== */
 export default function ClienteDetalhes() {
@@ -64,8 +91,9 @@ export default function ClienteDetalhes() {
   const [cli, setCli] = useState<Cliente | null>(null);
   const [loading, setLoading] = useState(true);
 
-  // saldos
-  const [saldo, setSaldo] = useState<number>(0);
+  // saldos (mesma lógica do Bloco)
+  const [saldoBloco, setSaldoBloco] = useState<number>(0);
+  const [financeiro, setFinanceiro] = useState<number>(0);
   const [aReceber, setAReceber] = useState<number>(0);
   const [saldoLoading, setSaldoLoading] = useState(false);
 
@@ -124,10 +152,12 @@ export default function ClienteDetalhes() {
     try {
       setSaldoLoading(true);
       const { data } = await api.get(`/clientes/${id}/saldo`, { headers: { "x-silent": "1" } });
-      setSaldo(Number(data?.saldo ?? 0));
+      setSaldoBloco(Number(data?.saldo_bloco ?? 0));
+      setFinanceiro(Number(data?.financeiro ?? 0));
       setAReceber(Number(data?.a_receber ?? 0));
     } catch {
-      setSaldo(0);
+      setSaldoBloco(0);
+      setFinanceiro(0);
       setAReceber(0);
     } finally {
       setSaldoLoading(false);
@@ -195,13 +225,7 @@ export default function ClienteDetalhes() {
   }, [openAssoc]);
 
   const isAtivo = cli?.status === "ATIVO" || cli?.ativo;
-  const docsPrincipal = useMemo(() => docs.find((d) => d.principal), [docs]);
-
-  const saldoTone = useMemo(() => {
-    if ((saldo ?? 0) > 0) return "from-emerald-50 to-emerald-100 ring-emerald-200 text-emerald-800";
-    if ((saldo ?? 0) < 0) return "from-rose-50 to-rose-100 ring-rose-200 text-rose-800";
-    return "from-slate-50 to-white ring-slate-200 text-slate-700";
-  }, [saldo]);
+  const docPrincipal = useMemo(() => docs.find((d) => d.principal), [docs]);
 
   /* ---------- Loading skeleton ---------- */
   if (loading || !cli) {
@@ -256,15 +280,15 @@ export default function ClienteDetalhes() {
 
             {/* Informações rápidas */}
             <div className="mt-1 text-sm text-slate-300">
-              {docsPrincipal ? (
+              {docPrincipal ? (
                 <>
-                  Doc principal: <span className="font-medium">{docsPrincipal.doc_tipo}</span>{" "}
+                  Doc principal: <span className="font-medium">{docPrincipal.doc_tipo}</span>{" "}
                   <button
                     className="underline decoration-1 underline-offset-2 hover:text-white/90"
-                    onClick={() => copy(docsPrincipal.doc_numero)}
+                    onClick={() => copy(onlyDigits(docPrincipal.doc_numero))}
                     title="Copiar"
                   >
-                    {docsPrincipal.doc_numero}
+                    {formatDoc(docPrincipal.doc_tipo, docPrincipal.doc_numero)}
                   </button>
                 </>
               ) : (
@@ -274,21 +298,35 @@ export default function ClienteDetalhes() {
             </div>
           </div>
 
-          {/* Cards de saldo */}
-          <div className="grid grid-cols-2 gap-3">
+          {/* Cards */}
+          <div className="grid grid-cols-3 gap-3 min-w-[28rem]">
             <div
-              className={`rounded-2xl bg-gradient-to-br px-4 py-3 ring-1 ${saldoTone} shadow-sm`}
-              title="Saldo acumulado (positivo = crédito; negativo = débito)"
+              className={`rounded-2xl bg-gradient-to-br px-4 py-3 ring-1 ${toneOf(
+                saldoBloco
+              )} shadow-sm`}
+              title="Soma de todas as movimentações do(s) bloco(s) ABERTO(s) (SAÍDA + / ENTRADA −), ignorando cancelados."
             >
-              <div className="text-xs text-slate-700/80">Saldo</div>
+              <div className="text-xs text-slate-700/80">Saldo do bloco</div>
               <div className="text-2xl font-bold tracking-tight">
-                {saldoLoading ? "calculando…" : formatBRL(saldo)}
+                {saldoLoading ? "calculando…" : formatBRL(saldoBloco)}
+              </div>
+            </div>
+
+            <div
+              className={`rounded-2xl bg-gradient-to-br px-4 py-3 ring-1 ${toneOf(
+                financeiro
+              )} shadow-sm`}
+              title="Lançamentos imediatos (bom_para = NULL) no bloco aberto + títulos BAIXADOS do bloco."
+            >
+              <div className="text-xs text-slate-700/80">Financeiro</div>
+              <div className="text-2xl font-bold tracking-tight">
+                {saldoLoading ? "…" : formatBRL(financeiro)}
               </div>
             </div>
 
             <div
               className="rounded-2xl bg-gradient-to-br from-amber-50 to-yellow-50 ring-1 ring-amber-200 text-amber-900 px-4 py-3 shadow-sm"
-              title="Títulos em ABERTO/PARCIAL do cliente"
+              title="Títulos em ABERTO/PARCIAL do bloco aberto."
             >
               <div className="text-xs">A receber</div>
               <div className="text-2xl font-bold tracking-tight">
@@ -298,7 +336,7 @@ export default function ClienteDetalhes() {
 
             <button
               onClick={recarregarSaldos}
-              className="col-span-2 mt-1 rounded-xl bg-white/10 px-3 py-1.5 text-white ring-1 ring-white/30 hover:bg-white/20"
+              className="col-span-3 mt-1 rounded-xl bg-white/10 px-3 py-1.5 text-white ring-1 ring-white/30 hover:bg-white/20"
               title="Recarregar saldos"
             >
               ↻ Atualizar saldos
@@ -407,7 +445,7 @@ export default function ClienteDetalhes() {
                     <th className="border p-2">Tipo</th>
                     <th className="border p-2">Número</th>
                     <th className="border p-2">Principal</th>
-                    <th className="border p-2">Modelo</th>
+                    <th className="border p-2">Percentual</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -433,9 +471,9 @@ export default function ClienteDetalhes() {
                           <button
                             className="underline decoration-1 underline-offset-2 hover:text-blue-700"
                             title="Copiar"
-                            onClick={() => copy(d.doc_numero)}
+                            onClick={() => copy(onlyDigits(d.doc_numero))}
                           >
-                            {d.doc_numero}
+                            {formatDoc(d.doc_tipo, d.doc_numero)}
                           </button>
                         </td>
                         <td className="border p-2">
@@ -450,7 +488,9 @@ export default function ClienteDetalhes() {
                             {d.principal ? "SIM" : "NÃO"}
                           </span>
                         </td>
-                        <td className="border p-2">{d.modelo_nota ?? "—"}</td>
+                        <td className="border p-2">
+                          {typeof d.percentual_nf === "number" ? `${d.percentual_nf}%` : "—"}
+                        </td>
                       </tr>
                     ))}
                 </tbody>

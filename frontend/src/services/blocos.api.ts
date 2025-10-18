@@ -1,4 +1,3 @@
-// src/services/blocos.api.ts
 import api from "./api";
 
 /* ------------ Types ------------ */
@@ -15,17 +14,24 @@ export type Bloco = {
   observacao?: string | null;
 };
 
+export type SaldosResponse = {
+  bloco_id: number;
+  saldo_bloco: number;     // todas as movimentações (ENTRADA− / SAÍDA+)
+  saldo_imediato: number;  // imediato (ignora bom_para)
+  a_receber: number;       // títulos ABERTO/PARCIAL
+  saldo_financeiro: number;// imediato + baixados
+};
+
 /* ------------ Blocos ------------ */
 export async function listarBlocos(params: {
   page?: number;
   limit?: number;
   status?: BlocoStatus;
   cliente_id?: number;
-  cliente?: string;   // busca por nome
-  search?: string;    // por código
+  cliente?: string;
+  search?: string;
 }) {
   const { data } = await api.get("/blocos", { params });
-  // normaliza o payload vindo da API
   const payload = data?.data ? data : { data };
   return {
     data: (payload.data ?? []) as Bloco[],
@@ -65,12 +71,7 @@ export async function excluirLancamento(blocoId: number, lancId: number) {
 }
 
 /* ------------ Saldos ------------ */
-export async function getSaldo(blocoId: number) {
-  const { data } = await api.get(`/blocos/${blocoId}/saldo`);
-  return data;
-}
-
 export async function getSaldos(blocoId: number) {
   const { data } = await api.get(`/blocos/${blocoId}/saldos`);
-  return data as { bloco_id: number; saldo: number; a_receber: number };
+  return data as SaldosResponse;
 }

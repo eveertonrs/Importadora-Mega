@@ -1,4 +1,3 @@
-// src/pages/ClienteDocumentoForm.tsx
 import { useEffect, useMemo, useState } from "react";
 import { useParams, useNavigate } from "react-router-dom";
 import api from "../services/api";
@@ -57,8 +56,7 @@ type Doc = {
   doc_tipo: "CNPJ" | "CPF";
   doc_numero: string;
   principal: boolean;
-  modelo_nota: string;
-  nome: string;
+  // modelo_nota saiu da UI
   tipo_nota: "MEIA" | "INTEGRAL";
   percentual_nf?: number | null;
 };
@@ -74,7 +72,6 @@ export default function ClienteDocumentoForm() {
   const [docNumeroRaw, setDocNumeroRaw] = useState("");
   const [docPrincipal, setDocPrincipal] = useState(true);
   const [percentual, setPercentual] = useState<number>(100);
-  const [modelo, setModelo] = useState<string>("");
   const [tipoNota, setTipoNota] = useState<"INTEGRAL" | "MEIA">("INTEGRAL");
 
   const [savingDoc, setSavingDoc] = useState(false);
@@ -118,12 +115,11 @@ export default function ClienteDocumentoForm() {
         doc_numero: docNumeroClean,
         principal: !!docPrincipal,
         percentual_nf: Math.max(0, Math.min(100, percentual)),
-        modelo_nota: (modelo ?? "").trim(),
+        // modelo_nota removido do payload
         tipo_nota: tipoNota,
       });
       setDocNumeroRaw("");
       setPercentual(100);
-      setModelo("");
       setTipoNota("INTEGRAL");
       setDocPrincipal(true);
       await load();
@@ -237,16 +233,6 @@ export default function ClienteDocumentoForm() {
           </div>
 
           <div className="md:col-span-2">
-            <label className="text-sm text-slate-600">Modelo (opcional)</label>
-            <input
-              className="mt-1 border rounded-xl px-3 py-2 w-full"
-              value={modelo}
-              onChange={(e) => setModelo(e.target.value)}
-              placeholder="ex.: 55, 65…"
-            />
-          </div>
-
-          <div className="md:col-span-2">
             <label className="text-sm text-slate-600">Tipo da nota</label>
             <select
               className="mt-1 border rounded-xl px-3 py-2 w-full"
@@ -280,7 +266,7 @@ export default function ClienteDocumentoForm() {
             {savingDoc ? "Salvando…" : "Adicionar documento"}
           </button>
           <button
-            onClick={() => { setDocNumeroRaw(""); setModelo(""); setPercentual(100); setTipoNota("INTEGRAL"); setDocPrincipal(true); }}
+            onClick={() => { setDocNumeroRaw(""); setPercentual(100); setTipoNota("INTEGRAL"); setDocPrincipal(true); }}
             className="px-3 py-2 rounded-xl border hover:bg-slate-50"
           >
             Limpar
@@ -295,7 +281,6 @@ export default function ClienteDocumentoForm() {
                 <th className="p-2 border w-20">Tipo</th>
                 <th className="p-2 border">Número</th>
                 <th className="p-2 border w-28">Principal</th>
-                <th className="p-2 border w-28">Modelo</th>
                 <th className="p-2 border w-28">Tipo (nota)</th>
                 <th className="p-2 border w-40">Percentual</th>
                 <th className="p-2 border w-28">Ações</th>
@@ -304,13 +289,13 @@ export default function ClienteDocumentoForm() {
             <tbody>
               {loading && (
                 <tr>
-                  <td colSpan={8} className="p-6 text-center text-slate-500">Carregando…</td>
+                  <td colSpan={7} className="p-6 text-center text-slate-500">Carregando…</td>
                 </tr>
               )}
 
               {!loading && docs.length === 0 && (
                 <tr>
-                  <td colSpan={8} className="p-10 text-center text-slate-500">
+                  <td colSpan={7} className="p-10 text-center text-slate-500">
                     Nenhum documento cadastrado. <span className="underline">Adicione o primeiro acima</span>.
                   </td>
                 </tr>
@@ -329,25 +314,12 @@ export default function ClienteDocumentoForm() {
                     <label className="inline-flex items-center gap-2">
                       <input
                         type="radio"
-                        name="principal"
+                        name={`principal-${d.id}`}
                         checked={d.principal}
                         onChange={() => updateField(d.id, { principal: true }, "Definido como principal")}
                       />
                       <span>{d.principal ? "Sim" : "Não"}</span>
                     </label>
-                  </td>
-
-                  {/* modelo (inline) */}
-                  <td className="p-2 border">
-                    <input
-                      className="border rounded-lg px-2 py-1 w-24"
-                      defaultValue={d.modelo_nota || ""}
-                      onBlur={(e) => {
-                        const v = e.currentTarget.value.trim();
-                        if (v !== (d.modelo_nota || "")) updateField(d.id, { modelo_nota: v || "" });
-                      }}
-                      placeholder="ex.: 55"
-                    />
                   </td>
 
                   {/* tipo_nota (inline) */}

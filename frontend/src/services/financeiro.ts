@@ -76,7 +76,7 @@ export type ConferenciaResult = {
   data: string;
   total: number;
   resumo: Record<string, number>;
-  itens: ConferenciaItem[];  // << agora existe 'itens'
+  itens: ConferenciaItem[];
 };
 
 export async function conferenciaDiaria(params: {

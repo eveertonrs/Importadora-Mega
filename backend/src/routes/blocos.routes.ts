@@ -12,7 +12,7 @@ import {
   getBlocoById,
   listPedidosDoBloco,
   listLancamentosDoBloco,
-  deleteLancamento,          // ⟵ NOVO
+  deleteLancamento,
 } from "../controllers/blocos.controller";
 
 const router = Router();
@@ -39,6 +39,6 @@ router.delete("/:id/pedidos/:pedido_id", authorize("admin", "financeiro"), unlin
 // Lançamentos
 router.get("/:id/lancamentos", authorize("admin", "financeiro", "vendedor"), listLancamentosDoBloco);
 router.post("/:id/lancamentos", authorize("admin", "financeiro"), addLancamentoToBloco);
-router.delete("/:id/lancamentos/:lanc_id", authorize("admin", "financeiro"), deleteLancamento); // ⟵ NOVO
+router.delete("/:id/lancamentos/:lanc_id", authorize("admin", "financeiro"), deleteLancamento);
 
 export default router;

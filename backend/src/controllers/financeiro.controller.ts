@@ -48,6 +48,16 @@ export const registrarBaixaTitulo = async (req: AuthenticatedRequest, res: Respo
   const tituloId = Number(req.params.id);
   if (!Number.isFinite(tituloId)) return res.status(400).json({ message: "ID inválido" });
 
+  const baixaSchema = z.object({
+    valor: z.coerce.number().positive().optional(),
+    valor_baixa: z.coerce.number().positive().optional(),
+    data_baixa: z.string().optional(),
+    forma: z.string().optional(),
+    forma_pagto: z.string().optional(),
+    observacao: z.string().optional(),
+    obs: z.string().optional(),
+  });
+
   try {
     const raw = baixaSchema.parse(req.body);
     const valor = (raw.valor_baixa ?? raw.valor)!;
@@ -55,19 +65,40 @@ export const registrarBaixaTitulo = async (req: AuthenticatedRequest, res: Respo
 
     const forma = raw.forma_pagto ?? raw.forma ?? undefined;
     const observacao = raw.obs ?? raw.observacao ?? undefined;
-    const userId = req.user?.id ?? null; // <<<<< AQUI: operador que deu a baixa
+    const userId = req.user?.id ?? null;
 
-    const titRS = await pool.request().input("id", sql.Int, tituloId).query(`
-      SELECT id, cliente_id, bloco_id, valor_bruto, valor_baixado, status
-      FROM financeiro_titulos
-      WHERE id = @id
-    `);
-    if (!titRS.recordset.length) return res.status(404).json({ message: "Título não encontrado" });
-
-    const titulo = titRS.recordset[0] as {
+    type TituloRow = {
       id: number; cliente_id: number; bloco_id: number | null;
+      bloco_lanc_id: number | null; tipo: string | null; bom_para: Date | null;
       valor_bruto: number; valor_baixado: number; status: string;
     };
+
+    async function fetchTitulo(): Promise<TituloRow> {
+      try {
+        const r = await pool.request().input("id", sql.Int, tituloId).query(`
+          SELECT id, cliente_id, bloco_id, bloco_lanc_id, tipo, bom_para, valor_bruto, valor_baixado, status
+          FROM financeiro_titulos
+          WHERE id = @id
+        `);
+        if (!r.recordset.length) throw new Error("Título não encontrado");
+        return r.recordset[0] as TituloRow;
+      } catch (e: any) {
+        const num = e?.number ?? e?.originalError?.number;
+        const msg = String(e?.message || "");
+        if (num !== 207 && !/Invalid column name 'bloco_lanc_id'/i.test(msg)) throw e;
+        const r2 = await pool.request().input("id", sql.Int, tituloId).query(`
+          SELECT id, cliente_id, bloco_id,
+                 CAST(NULL AS int) AS bloco_lanc_id,
+                 tipo, bom_para, valor_bruto, valor_baixado, status
+          FROM financeiro_titulos
+          WHERE id = @id
+        `);
+        if (!r2.recordset.length) throw new Error("Título não encontrado");
+        return r2.recordset[0] as TituloRow;
+      }
+    }
+
+    const titulo = await fetchTitulo();
 
     const novoBaixado = Number(titulo.valor_baixado ?? 0) + valor;
     const statusNovo = novoBaixado >= Number(titulo.valor_bruto ?? 0) ? "BAIXADO" : "PARCIAL";
@@ -87,34 +118,63 @@ export const registrarBaixaTitulo = async (req: AuthenticatedRequest, res: Respo
           WHERE id = @id
         `);
 
-      // 2) Lança a baixa no bloco (impacta saldo) e guarda quem baixou
-      if (titulo.bloco_id) {
-        const dataISO = toISO(raw.data_baixa) ?? new Date().toISOString();
+      // 2) Marcar a linha ORIGINAL do bloco como "BAIXADO NO FINANCEIRO"
+      if (statusNovo === "BAIXADO" && titulo.bloco_id) {
+        let lancIdToUpdate: number | null = titulo.bloco_lanc_id ?? null;
 
-        await new sql.Request(tx)
-          .input("bloco_id", sql.Int, Number(titulo.bloco_id))
-          .input("tipo_recebimento", sql.VarChar(30), "BAIXA-FINANCEIRO")
-          .input("valor", sql.Decimal(18, 2), valor)
-          .input("data_lancamento", sql.DateTime2, dataISO)
-          .input("bom_para", sql.DateTime2, null)
-          .input("tipo_cheque", sql.VarChar(15), null)
-          .input("numero_referencia", sql.VarChar(60), `TIT-${titulo.id}`)
-          .input("status", sql.VarChar(30), "PENDENTE")
-          .input(
-            "observacao",
-            sql.VarChar(sql.MAX),
-            observacao ? `Baixa ${forma ?? ""} - ${observacao}`.trim() : `Baixa ${forma ?? ""}`.trim()
-          )
-          .input("sentido", sql.VarChar(10), "SAIDA")
-          .input("criado_por", sql.Int, userId) // <<<<< AQUI: operador
-          .query(`
-            INSERT INTO bloco_lancamentos
-              (bloco_id, tipo_recebimento, valor, data_lancamento, bom_para, tipo_cheque,
-               numero_referencia, status, observacao, sentido, criado_por, criado_em)
-            VALUES
-              (@bloco_id, @tipo_recebimento, @valor, @data_lancamento, @bom_para, @tipo_cheque,
-               @numero_referencia, @status, @observacao, @sentido, @criado_por, SYSUTCDATETIME())
-          `);
+        if (!lancIdToUpdate) {
+          // localizar por tipo + valor + bom_para (fallback schema antigo)
+          const r = await new sql.Request(tx)
+            .input("bloco_id", sql.Int, titulo.bloco_id)
+            .input("tipo", sql.VarChar(30), String(titulo.tipo || "").toUpperCase())
+            .input("valor", sql.Decimal(18, 2), Number(titulo.valor_bruto || 0))
+            .input("bom_para", sql.Date, titulo.bom_para ? new Date(titulo.bom_para) : null)
+            .query(`
+              SELECT TOP 1 id
+              FROM dbo.bloco_lancamentos
+              WHERE bloco_id = @bloco_id
+                AND sentido = 'SAIDA'
+                AND UPPER(tipo_recebimento) = @tipo
+                AND ABS(valor - @valor) < 0.01
+                AND (
+                      (@bom_para IS NULL AND bom_para IS NULL)
+                   OR ( @bom_para IS NOT NULL AND bom_para IS NOT NULL AND CAST(bom_para AS date) = CAST(@bom_para AS date) )
+                )
+              ORDER BY id DESC
+            `);
+          if (r.recordset.length) lancIdToUpdate = Number(r.recordset[0].id);
+        }
+
+        if (lancIdToUpdate) {
+          const reqUpd = new sql.Request(tx)
+            .input("id", sql.Int, lancIdToUpdate)
+            .input("obsExtra", sql.VarChar(sql.MAX), (observacao ? ` • ${observacao}` : ""))
+            .input("userId", sql.Int, userId);
+
+          // tenta com atualizado_em; se der 207, refaz sem a coluna
+          try {
+            await reqUpd.query(`
+              UPDATE dbo.bloco_lancamentos
+                SET status = 'BAIXADO NO FINANCEIRO',
+                    observacao = LEFT(CONCAT(COALESCE(observacao,''), ' (baixa ${forma ?? ''}', @obsExtra, ')'), 300),
+                    atualizado_em = SYSUTCDATETIME()
+                WHERE id = @id
+            `);
+          } catch (e: any) {
+            const num = e?.number ?? e?.originalError?.number;
+            const msg = String(e?.message || "");
+            if (num !== 207 && !/Invalid column name 'atualizado_em'/i.test(msg)) throw e;
+            await new sql.Request(tx)
+              .input("id", sql.Int, lancIdToUpdate)
+              .input("obsExtra", sql.VarChar(sql.MAX), (observacao ? ` • ${observacao}` : ""))
+              .query(`
+                UPDATE dbo.bloco_lancamentos
+                SET status = 'BAIXADO NO FINANCEIRO',
+                    observacao = CONCAT(COALESCE(observacao,''), ' (baixa ${forma ?? ''}', @obsExtra, ')')
+                WHERE id = @id
+              `);
+          }
+        }
       }
 
       await tx.commit();
@@ -250,7 +310,8 @@ export const listTitulos = async (req: Request, res: Response) => {
 };
 
 /* ======================================================================
-   3) CONFERÊNCIA DIÁRIA
+   3) CONFERÊNCIA DIÁRIA e 4) ATUALIZAR CONFERÊNCIA
+   (inalterados em relação ao teu último envio)
    ====================================================================== */
 
 const conferenciaQuery = z.object({
@@ -331,7 +392,6 @@ export const conferenciaDiaria = async (req: Request, res: Response) => {
 
     const itens = r.recordset as Array<any>;
 
-    // resumo por tipo (somatório simples do campo "valor")
     const resumo: Record<string, number> = {};
     for (const it of itens) {
       const k = String(it.tipo || "-");
@@ -350,17 +410,13 @@ export const conferenciaDiaria = async (req: Request, res: Response) => {
   }
 };
 
-/* ======================================================================
-   4) ATUALIZAR CONFERÊNCIA (confirmar / divergente / desfazer)
-   ====================================================================== */
-
 const conferenciaAtualizarSchema = z.object({
   data: z.string().optional(),
   status: z.enum(["PENDENTE", "CONFIRMADO", "DIVERGENTE"]),
   comentario: z.string().optional(),
   itens: z.array(
     z.object({
-      origem: z.enum(["BLOCO_LANC", "TITULO", "BAIXA"]), // BAIXA == BLOCO_LANC (baixa-financeiro está em lancamentos)
+      origem: z.enum(["BLOCO_LANC", "TITULO", "BAIXA"]),
       origem_id: z.number().int().positive(),
     })
   ).min(1),
@@ -368,6 +424,16 @@ const conferenciaAtualizarSchema = z.object({
 
 export const conferenciaAtualizar = async (req: AuthenticatedRequest, res: Response) => {
   try {
+    const conferenciaAtualizarSchema = z.object({
+      data: z.string().optional(),
+      status: z.enum(["PENDENTE", "CONFIRMADO", "DIVERGENTE"]),
+      comentario: z.string().optional(),
+      itens: z.array(z.object({
+        origem: z.enum(["BLOCO_LANC", "TITULO", "BAIXA"]),
+        origem_id: z.number().int().positive(),
+      })).min(1),
+    });
+
     const { status, comentario, itens } = conferenciaAtualizarSchema.parse(req.body);
     const userId = req.user?.id ?? null;
 
@@ -379,7 +445,6 @@ export const conferenciaAtualizar = async (req: AuthenticatedRequest, res: Respo
         const ref_tipo = row.origem === "BAIXA" ? "BLOCO_LANC" : row.origem;
         const ref_id = row.origem_id;
 
-        // data_ref de acordo com a origem
         let data_ref: Date | null = null;
 
         if (ref_tipo === "TITULO") {
@@ -402,15 +467,17 @@ export const conferenciaAtualizar = async (req: AuthenticatedRequest, res: Respo
         const obs = status === "DIVERGENTE" ? (comentario ?? null) : null;
 
         if (exists.recordset.length) {
-          await new sql.Request(tx)
+          const reqUpd = new sql.Request(tx)
             .input("ref_tipo", sql.VarChar(20), ref_tipo)
             .input("ref_id", sql.Int, ref_id)
             .input("status", sql.VarChar(15), status)
             .input("obs", sql.VarChar(400), obs)
             .input("conferido_por", userId)
             .input("conferido_em", status === "PENDENTE" ? null : new Date())
-            .input("data_ref", data_ref)
-            .query(`
+            .input("data_ref", data_ref);
+
+          try {
+            await reqUpd.query(`
               UPDATE dbo.financeiro_conferencia
               SET status = @status,
                   obs = @obs,
@@ -420,21 +487,64 @@ export const conferenciaAtualizar = async (req: AuthenticatedRequest, res: Respo
                   atualizado_em = SYSUTCDATETIME()
               WHERE ref_tipo = @ref_tipo AND ref_id = @ref_id
             `);
+          } catch (e: any) {
+            const num = e?.number ?? e?.originalError?.number;
+            const msg = String(e?.message || "");
+            if (num !== 207 && !/Invalid column name 'atualizado_em'/i.test(msg)) throw e;
+            await new sql.Request(tx)
+              .input("ref_tipo", sql.VarChar(20), ref_tipo)
+              .input("ref_id", sql.Int, ref_id)
+              .input("status", sql.VarChar(15), status)
+              .input("obs", sql.VarChar(400), obs)
+              .input("conferido_por", userId)
+              .input("conferido_em", status === "PENDENTE" ? null : new Date())
+              .input("data_ref", data_ref)
+              .query(`
+                UPDATE dbo.financeiro_conferencia
+                SET status = @status,
+                    obs = @obs,
+                    conferido_por = @conferido_por,
+                    conferido_em = @conferido_em,
+                    data_ref = COALESCE(@data_ref, data_ref)
+                WHERE ref_tipo = @ref_tipo AND ref_id = @ref_id
+              `);
+          }
         } else {
-          await new sql.Request(tx)
+          const reqIns = new sql.Request(tx)
             .input("ref_tipo", sql.VarChar(20), ref_tipo)
             .input("ref_id", sql.Int, ref_id)
             .input("status", sql.VarChar(15), status)
             .input("obs", sql.VarChar(400), obs)
             .input("conferido_por", userId)
             .input("conferido_em", status === "PENDENTE" ? null : new Date())
-            .input("data_ref", data_ref)
-            .query(`
+            .input("data_ref", data_ref);
+
+          try {
+            await reqIns.query(`
               INSERT INTO dbo.financeiro_conferencia
                 (ref_tipo, ref_id, status, obs, conferido_por, conferido_em, data_ref, criado_em, atualizado_em)
               VALUES
                 (@ref_tipo, @ref_id, @status, @obs, @conferido_por, @conferido_em, @data_ref, SYSUTCDATETIME(), SYSUTCDATETIME())
             `);
+          } catch (e: any) {
+            const num = e?.number ?? e?.originalError?.number;
+            const msg = String(e?.message || "");
+            if (num !== 207 && !/Invalid column name 'atualizado_em'/i.test(msg)) throw e;
+            await new sql.Request(tx)
+              .input("ref_tipo", sql.VarChar(20), ref_tipo)
+              .input("ref_id", sql.Int, ref_id)
+              .input("status", sql.VarChar(15), status)
+              .input("obs", sql.VarChar(400), obs)
+              .input("conferido_por", userId)
+              .input("conferido_em", status === "PENDENTE" ? null : new Date())
+              .input("data_ref", data_ref)
+              .query(`
+                INSERT INTO dbo.financeiro_conferencia
+                  (ref_tipo, ref_id, status, obs, conferido_por, conferido_em, data_ref, criado_em)
+                VALUES
+                  (@ref_tipo, @ref_id, @status, @obs, @conferido_por, @conferido_em, @data_ref, SYSUTCDATETIME())
+              `);
+          }
         }
       }
 

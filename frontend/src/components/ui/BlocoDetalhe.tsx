@@ -4,31 +4,30 @@ import {
   getBloco,
   listarLancamentos,
   adicionarLancamento,
-  getSaldo,      // legado (fallback)
-  getSaldos,     // novo (saldo + a receber)
+  getSaldos,
   fecharBloco,
-  excluirLancamento,       // ⟵ excluir lançamento
+  excluirLancamento,
 } from "../../services/blocos.api";
+import type { SaldosResponse } from "../../services/blocos.api";
 import api from "../../services/api";
 
 type DetBloco = Awaited<ReturnType<typeof getBloco>>;
-type LancStatus = "PENDENTE" | "LIQUIDADO" | "DEVOLVIDO" | "CANCELADO";
+type LancStatus = "PENDENTE" | "LIQUIDADO" | "DEVOLVIDO" | "CANCELADO" | "BAIXADO NO FINANCEIRO";
 type Sentido = "ENTRADA" | "SAIDA";
 
 type ParametroItem = {
   id: number;
-  descricao: string;               // ex.: CHEQUE, PIX, BOLETO...
+  descricao: string;
   tipo: "ENTRADA" | "SAIDA";
   ativo: boolean;
-  exige_bom_para: boolean;         // se true, pede o campo "bom para"
-  exige_tipo_cheque: boolean;      // se true, pede "tipo de cheque"
+  exige_bom_para: boolean;
+  exige_tipo_cheque: boolean;
 };
 
 /* ================= helpers de data ================= */
 function dateBR(value?: string | Date | null) {
   if (!value) return "—";
   if (typeof value === "string") {
-    // cobre "YYYY-MM-DD" ou "YYYY-MM-DDTHH:mm[:ss]"
     const m = value.match(/^(\d{4})-(\d{2})-(\d{2})/);
     if (m) return `${m[3]}/${m[2]}/${m[1]}`;
   }
@@ -47,7 +46,13 @@ function dateTimeBR(value?: string | Date | null) {
   const d = new Date(value);
   return isNaN(d.getTime())
     ? "—"
-    : d.toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
+    : d.toLocaleString("pt-BR", {
+        day: "2-digit",
+        month: "2-digit",
+        year: "numeric",
+        hour: "2-digit",
+        minute: "2-digit",
+      });
 }
 
 export default function BlocoDetalhe() {
@@ -58,8 +63,7 @@ export default function BlocoDetalhe() {
   const [b, setB] = useState<DetBloco | null>(null);
 
   // Saldos
-  const [saldo, setSaldo] = useState<number>(0);       // saldo “normal”
-  const [aReceber, setAReceber] = useState<number>(0); // títulos ABERTO/PARCIAL do bloco
+  const [saldos, setSaldos] = useState<SaldosResponse | null>(null);
 
   const [tab, setTab] = useState<"lancamentos" | "resumo">("lancamentos");
 
@@ -76,7 +80,7 @@ export default function BlocoDetalhe() {
       observacao?: string | null;
       criado_por?: number | null;
       criado_por_nome?: string | null;
-      status?: LancStatus; // mantido só para filtro
+      status?: LancStatus;
     }>
   >([]);
   const [lPage, setLPage] = useState(1);
@@ -124,8 +128,7 @@ export default function BlocoDetalhe() {
   async function load() {
     const [det, s] = await Promise.all([getBloco(blocoId), getSaldos(blocoId)]);
     setB(det);
-    setSaldo(Number(s?.saldo ?? 0));
-    setAReceber(Number(s?.a_receber ?? 0));
+    setSaldos(s);
   }
 
   async function loadLancs() {
@@ -137,16 +140,11 @@ export default function BlocoDetalhe() {
     });
     setLancs(r?.data ?? []);
 
-    // atualiza cartões de saldo (novo endpoint)
+    // atualiza os cartões
     try {
       const s = await getSaldos(blocoId);
-      setSaldo(Number(s?.saldo ?? 0));
-      setAReceber(Number(s?.a_receber ?? 0));
-    } catch {
-      // fallback p/ compat: tenta saldo legado
-      const s2 = await getSaldo(blocoId);
-      setSaldo(Number(s2?.saldo ?? 0));
-    }
+      setSaldos(s);
+    } catch {}
   }
 
   useEffect(() => {
@@ -199,8 +197,7 @@ export default function BlocoDetalhe() {
     setSavingLanc(true);
     try {
       const payload: any = {
-        tipo_recebimento: param.descricao,       // descrição do parâmetro
-        sentido: param.tipo as Sentido,          // ENTADA/SAIDA do parâmetro
+        tipo_recebimento: param.descricao,
         valor: toNumber(valor),
         data_lancamento: dataLanc,
         numero_referencia: numRef || undefined,
@@ -208,7 +205,7 @@ export default function BlocoDetalhe() {
       };
 
       if (requerTipoCheque) payload.tipo_cheque = tipoCheque;
-      if (requerBomPara)     payload.bom_para   = bomPara;
+      if (requerBomPara) payload.bom_para = bomPara;
 
       await adicionarLancamento(blocoId, payload);
 
@@ -244,14 +241,21 @@ export default function BlocoDetalhe() {
 
   async function doFechar() {
     if (!podeFechar) return;
-    if (saldo > 0) {
+    const s = saldos?.saldo_imediato ?? 0;
+    if (s > 0) {
       const ok = confirm(
-        `Fechar com saldo POSITIVO de ${saldo.toLocaleString("pt-BR",{style:"currency",currency:"BRL"})}?\n\nO crédito será considerado no próximo bloco do cliente.`
+        `Fechar com saldo POSITIVO de ${s.toLocaleString("pt-BR", {
+          style: "currency",
+          currency: "BRL",
+        })}?\n\nO crédito será considerado no próximo bloco do cliente.`
       );
       if (!ok) return;
-    } else if (saldo < 0) {
+    } else if (s < 0) {
       const ok = confirm(
-        `Fechar com saldo NEGATIVO de ${saldo.toLocaleString("pt-BR",{style:"currency","currency":"BRL"})}?\n\nVocê confirmou que pode fechar mesmo com saldo devedor.`
+        `Fechar com saldo NEGATIVO de ${s.toLocaleString("pt-BR", {
+          style: "currency",
+          currency: "BRL",
+        })}?\n\nVocê confirmou que pode fechar mesmo com saldo devedor.`
       );
       if (!ok) return;
     }
@@ -264,33 +268,39 @@ export default function BlocoDetalhe() {
     }
   }
 
-  const saldoTone =
-    saldo < 0
-      ? "from-red-50 to-rose-50 text-red-700"
-      : saldo > 0
-      ? "from-emerald-50 to-teal-50 text-emerald-700"
-      : "from-slate-50 to-slate-50 text-slate-800";
+  /** ==================== CORES MAIS FORTES ==================== **/
+  const tone = (n: number) =>
+    n < 0
+      ? "from-red-200 to-rose-200 text-red-900 ring-1 ring-red-300"
+      : n > 0
+      ? "from-emerald-200 to-teal-200 text-emerald-900 ring-1 ring-emerald-300"
+      : "from-slate-100 to-slate-100 text-slate-900 ring-1 ring-slate-300";
 
-  // classe do select (realça conforme o tipo escolhido)
   const selectTone =
     paramSelecionado?.tipo === "ENTRADA"
-      ? "focus:ring-2 ring-red-300"
+      ? "focus:outline-none focus:ring-2 focus:ring-red-400"
       : paramSelecionado?.tipo === "SAIDA"
-      ? "focus:ring-2 ring-emerald-300"
-      : "focus:ring-2 ring-slate-300";
+      ? "focus:outline-none focus:ring-2 focus:ring-emerald-400"
+      : "focus:outline-none focus:ring-2 focus:ring-slate-400";
 
   return (
     <div className="space-y-5">
       {/* Header */}
       <div className="rounded-2xl border bg-white shadow-sm p-4 flex items-center justify-between">
         <div className="flex items-center gap-3">
-          <button onClick={() => nav(-1)} className="px-3 py-2 rounded-lg border hover:bg-slate-50">← Voltar</button>
-          <h1 className="text-xl font-semibold">{b?.cliente_nome ?? `Cliente #${b?.cliente_id}`}</h1>
+          <button onClick={() => nav(-1)} className="px-3 py-2 rounded-lg border hover:bg-slate-50">
+            ← Voltar
+          </button>
+          <h1 className="text-xl font-semibold">
+            {b?.cliente_nome ?? `Cliente #${b?.cliente_id}`}
+          </h1>
           {b && (
             <span
               className={
-                "text-[11px] px-2 py-0.5 rounded-full font-medium " +
-                (b.status === "ABERTO" ? "bg-blue-100 text-blue-700" : "bg-slate-200 text-slate-700")
+                "text-[11px] px-2 py-0.5 rounded-full font-medium ring-1 " +
+                (b.status === "ABERTO"
+                  ? "bg-blue-200 text-blue-900 ring-blue-300"
+                  : "bg-slate-300 text-slate-900 ring-slate-400")
               }
             >
               {b.status}
@@ -313,10 +323,7 @@ export default function BlocoDetalhe() {
           <button
             key={t}
             onClick={() => setTab(t)}
-            className={
-              "px-4 py-2 text-sm " +
-              (tab === t ? "bg-slate-900 text-white" : "hover:bg-slate-50")
-            }
+            className={"px-4 py-2 text-sm " + (tab === t ? "bg-slate-900 text-white" : "hover:bg-slate-50")}
           >
             {t === "lancamentos" ? "Lançamentos" : "Resumo"}
           </button>
@@ -324,25 +331,31 @@ export default function BlocoDetalhe() {
       </div>
 
       {/* Saldos */}
-      <div className="grid sm:grid-cols-2 gap-3">
-        <div className={`rounded-2xl border bg-gradient-to-r ${saldoTone} p-4`}>
-          <div className="text-xs opacity-70">Saldo</div>
+      <div className="grid lg:grid-cols-3 gap-3">
+        <div className={`rounded-2xl border bg-gradient-to-r ${tone(saldos?.saldo_bloco ?? 0)} p-4`}>
+          <div className="text-xs/5 opacity-80">Saldo do bloco</div>
           <div className="text-2xl font-semibold">
-            {saldo.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}
+            {(saldos?.saldo_bloco ?? 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}
           </div>
-          <div className="text-[11px] opacity-70 mt-1">
-            Considere apenas lançamentos imediatos (ignora lançamentos com “bom para”).
+          <div className="text-[11px] opacity-80 mt-1">
+            Soma de todas as movimentações (ENTRADA − / SAÍDA +), independente de “bom para”.
           </div>
         </div>
 
-        <div className="rounded-2xl border bg-gradient-to-r from-amber-50 to-yellow-50 text-amber-900 p-4">
-          <div className="text-xs opacity-70">A receber</div>
+        <div className={`rounded-2xl border bg-gradient-to-r ${tone(saldos?.saldo_financeiro ?? 0)} p-4`}>
+          <div className="text-xs/5 opacity-80">Financeiro</div>
           <div className="text-2xl font-semibold">
-            {aReceber.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}
+            {(saldos?.saldo_financeiro ?? 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}
           </div>
-          <div className="text-[11px] opacity-70 mt-1">
-            Títulos do bloco em ABERTO/PARCIAL no Contas a Receber.
+          <div className="text-[11px] opacity-80 mt-1">Lançamentos imediatos + títulos baixados do bloco.</div>
+        </div>
+
+        <div className="rounded-2xl border bg-gradient-to-r from-amber-200 to-yellow-200 text-amber-900 ring-1 ring-amber-300 p-4">
+          <div className="text-xs/5 opacity-80">A receber</div>
+          <div className="text-2xl font-semibold">
+            {(saldos?.a_receber ?? 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}
           </div>
+          <div className="text-[11px] opacity-80 mt-1">Títulos em ABERTO/PARCIAL do bloco.</div>
         </div>
       </div>
 
@@ -363,15 +376,12 @@ export default function BlocoDetalhe() {
                 <option value="LIQUIDADO">LIQUIDADO</option>
                 <option value="DEVOLVIDO">DEVOLVIDO</option>
                 <option value="CANCELADO">CANCELADO</option>
+                <option value="BAIXADO NO FINANCEIRO">BAIXADO NO FINANCEIRO</option>
               </select>
             </div>
             <div>
               <label className="text-sm text-slate-700">Tipo</label>
-              <select
-                className="mt-1 border rounded-xl px-3 py-2"
-                value={fTipo}
-                onChange={(e) => setFTipo(e.target.value)}
-              >
+              <select className="mt-1 border rounded-xl px-3 py-2" value={fTipo} onChange={(e) => setFTipo(e.target.value)}>
                 <option value="">(todos)</option>
                 {parametros.map((p) => {
                   const prefix = p.tipo === "ENTRADA" ? "🔴 ENTRADA" : "🟢 SAÍDA";
@@ -420,8 +430,8 @@ export default function BlocoDetalhe() {
                       className={[
                         "text-[11px] whitespace-nowrap mt-1 rounded-full px-2 py-1 font-medium ring-1",
                         paramSelecionado.tipo === "ENTRADA"
-                          ? "bg-red-50 text-red-700 ring-red-200"
-                          : "bg-emerald-50 text-emerald-700 ring-emerald-200",
+                          ? "bg-red-200 text-red-900 ring-red-300"
+                          : "bg-emerald-200 text-emerald-900 ring-emerald-300",
                       ].join(" ")}
                       title={paramSelecionado.tipo}
                     >
@@ -453,7 +463,7 @@ export default function BlocoDetalhe() {
                 />
               </div>
 
-              {/* Campos condicionais de acordo com o parâmetro */}
+              {/* Campos condicionais */}
               {requerTipoCheque && (
                 <div>
                   <label className="text-sm text-slate-700">Tipo de cheque</label>
@@ -519,7 +529,7 @@ export default function BlocoDetalhe() {
           {/* tabela */}
           <div className="rounded-2xl border bg-white overflow-x-auto shadow-sm">
             <table className="w-full text-sm">
-              <thead className="bg-slate-50/90 backdrop-blur border-b sticky top-0">
+              <thead className="bg-slate-100 backdrop-blur border-b sticky top-0">
                 <tr>
                   <th className="p-2 border">Tipo</th>
                   <th className="p-2 border">Sentido</th>
@@ -534,16 +544,19 @@ export default function BlocoDetalhe() {
               </thead>
               <tbody>
                 {lancs.map((l) => {
-                  const isReceber = !!l.bom_para;
-                  const baseTone =
-                    isReceber
-                      ? "bg-amber-50/60"               // “A receber”
-                      : l.sentido === "ENTRADA"
-                        ? "bg-red-50/60"
-                        : "bg-emerald-50/60";
+                  const isReceber = !!l.bom_para && l.status !== "BAIXADO NO FINANCEIRO";
+                  const baixado = l.status === "BAIXADO NO FINANCEIRO";
+
+                  const toneRow = baixado
+                    ? "bg-emerald-100" // baixado no financeiro => verde
+                    : isReceber
+                    ? "bg-amber-100" // A receber
+                    : l.sentido === "ENTRADA"
+                    ? "bg-red-100"
+                    : "bg-emerald-100";
 
                   return (
-                    <tr key={l.id} className={baseTone}>
+                    <tr key={l.id} className={toneRow}>
                       <td className="p-2 border">{l.tipo_recebimento}</td>
                       <td className="p-2 border">{l.sentido}</td>
                       <td className="p-2 border">
@@ -581,7 +594,10 @@ export default function BlocoDetalhe() {
           </div>
 
           <div className="flex items-center gap-2">
-            <button className="px-2 py-1 rounded-xl border hover:bg-slate-50" onClick={() => setLPage((p) => Math.max(1, p - 1))}>
+            <button
+              className="px-2 py-1 rounded-xl border hover:bg-slate-50"
+              onClick={() => setLPage((p) => Math.max(1, p - 1))}
+            >
               ◀
             </button>
             <span className="text-sm">Página {lPage}</span>
@@ -590,7 +606,9 @@ export default function BlocoDetalhe() {
             </button>
             <select className="ml-3 border rounded-xl px-2 py-1" value={lLimit} onChange={(e) => setLLimit(Number(e.target.value))}>
               {[10, 25, 50].map((n) => (
-                <option key={n} value={n}>{n}/pág</option>
+                <option key={n} value={n}>
+                  {n}/pág
+                </option>
               ))}
             </select>
           </div>

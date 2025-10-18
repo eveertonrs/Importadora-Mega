@@ -459,8 +459,17 @@ export default function Blocos() {
 
       {/* Modal novo bloco — versão melhorada */}
       {openNew && (
-        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 p-4" onClick={() => setOpenNew(false)}>
-          <div className="bg-white rounded-2xl w-full max-w-lg shadow-2xl ring-1 ring-slate-200" onClick={(e) => e.stopPropagation()} role="dialog" aria-modal="true" aria-labelledby="novo-bloco-title">
+        <div
+          className="fixed inset-0 bg-black/40 backdrop-blur-sm flex items-center justify-center z-50 p-4"
+          onClick={() => setOpenNew(false)}
+        >
+          <div
+            className="bg-white rounded-2xl w-full max-w-lg shadow-2xl ring-1 ring-slate-200"
+            onClick={(e) => e.stopPropagation()}
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="novo-bloco-title"
+          >
             <div className="rounded-t-2xl bg-gradient-to-r from-slate-50 to-white px-5 py-4 border-b">
               <h2 id="novo-bloco-title" className="text-lg font-semibold">Abrir novo bloco</h2>
               <p className="text-slate-500 text-sm">Selecione o cliente e, se quiser, informe uma observação.</p>

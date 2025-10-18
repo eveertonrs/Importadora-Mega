@@ -13,40 +13,6 @@ const mapTipoNotaDb = (v?: string | null): "MEIA" | "INTEGRAL" => {
   return "INTEGRAL"; // fallback seguro
 };
 
-// helpers (se já tiver no arquivo, reaproveite)
-const toDbNull = (v?: string | null) =>
-  v === undefined || v === null || (typeof v === "string" && v.trim() === "") ? null : v;
-
-
-const isValidCPF = (cpf: string) => {
-  const s = onlyDigits(cpf);
-  if (s.length !== 11 || /^(\d)\1+$/.test(s)) return false;
-  let sum = 0, rest = 0;
-  for (let i = 1; i <= 9; i++) sum += parseInt(s.substring(i - 1, i)) * (11 - i);
-  rest = (sum * 10) % 11; if (rest >= 10) rest = 0;
-  if (rest !== parseInt(s.substring(9, 10))) return false;
-  sum = 0;
-  for (let i = 1; i <= 10; i++) sum += parseInt(s.substring(i - 1, i)) * (12 - i);
-  rest = (sum * 10) % 11; if (rest >= 10) rest = 0;
-  return rest === parseInt(s.substring(10, 11));
-};
-
-const isValidCNPJ = (cnpj: string) => {
-  const s = onlyDigits(cnpj);
-  if (s.length !== 14 || /^(\d)\1+$/.test(s)) return false;
-  const calc = (arr: number[]) => {
-    let sum = 0;
-    const w = arr.length === 12 ? [5,4,3,2,9,8,7,6,5,4,3,2] : [6,5,4,3,2,9,8,7,6,5,4,3,2];
-    arr.forEach((v, i) => (sum += v * w[i]));
-    const mod = sum % 11;
-    return mod < 2 ? 0 : 11 - mod;
-  };
-  const n = s.split("").map(Number);
-  const d1 = calc(n.slice(0, 12));
-  const d2 = calc(n.slice(0, 12).concat(d1));
-  return d1 === n[12] && d2 === n[13];
-};
-
 /* ========================= LISTAGEM / BUSCA ========================= */
 
 export const getClientes = async (req: Request, res: Response) => {
@@ -64,9 +30,9 @@ export const getClientes = async (req: Request, res: Response) => {
     const term =
       typeof q === "string" && q.trim() !== "" ? q : typeof search === "string" ? search : "";
     if (term && term.trim() !== "") {
-      where.push("(nome_fantasia LIKE @search)");
-      request.input("search", `%${term}%`);
-      countRequest.input("search", `%${term}%`);
+      where.push("(nome_fantasia LIKE '%' + @search + '%')");
+      request.input("search", term);
+      countRequest.input("search", term);
     }
 
     if (typeof status === "string" && (status === "ATIVO" || status === "INATIVO")) {
@@ -81,7 +47,7 @@ export const getClientes = async (req: Request, res: Response) => {
       countRequest.input("tabelaPreco", tabelaPreco.trim());
     }
 
-    const whereSql = where.length ? ` WHERE ${where.join(" AND ")}` : "";
+    const whereSql = where.length ? `WHERE ${where.join(" AND ")}` : "";
 
     const query = `
       SELECT id, nome_fantasia, grupo_empresa, tabela_preco, status, whatsapp, anotacoes, links_json
@@ -108,6 +74,89 @@ export const getClientes = async (req: Request, res: Response) => {
   }
 };
 
+/* ============= Helper de saldos (mesma lógica do Bloco) ============= */
+async function calcularSaldosCliente(clienteId: number) {
+  // 1) Saldo do bloco: todas as movimentações (ignora CANCELADO), SAÍDA + / ENTRADA −
+  const sb = await pool
+    .request()
+    .input("id", sql.Int, clienteId)
+    .query(
+      `;WITH open_bloco AS (
+        SELECT id FROM dbo.blocos WHERE cliente_id = @id AND status = 'ABERTO'
+      )
+      SELECT
+        COALESCE(SUM(
+          CASE
+            WHEN l.status = 'CANCELADO' THEN 0
+            WHEN l.sentido = 'SAIDA'    THEN l.valor
+            WHEN l.sentido = 'ENTRADA'  THEN -l.valor
+            ELSE 0
+          END
+        ), 0) AS saldo_bloco
+      FROM open_bloco b
+      LEFT JOIN dbo.bloco_lancamentos l ON l.bloco_id = b.id`
+    );
+
+  const saldo_bloco = Number(sb.recordset[0]?.saldo_bloco ?? 0);
+
+  // 2) Financeiro = imediatos (bom_para IS NULL) com o mesmo sinal + títulos BAIXADOS
+  const fi = await pool
+    .request()
+    .input("id", sql.Int, clienteId)
+    .query(
+      `;WITH open_bloco AS (
+        SELECT id FROM dbo.blocos WHERE cliente_id = @id AND status = 'ABERTO'
+      )
+      SELECT
+        COALESCE((
+          SELECT SUM(
+            CASE
+              WHEN l.status='CANCELADO' THEN 0
+              WHEN l.bom_para IS NULL AND l.sentido='SAIDA'   THEN l.valor
+              WHEN l.bom_para IS NULL AND l.sentido='ENTRADA' THEN -l.valor
+              ELSE 0
+            END
+          )
+          FROM open_bloco b
+          LEFT JOIN dbo.bloco_lancamentos l ON l.bloco_id = b.id
+        ),0) AS imediatos,
+        COALESCE((
+          SELECT SUM(t.valor_baixado)
+          FROM open_bloco b
+          JOIN dbo.financeiro_titulos t ON t.bloco_id = b.id
+          WHERE t.status = 'BAIXADO'
+        ),0) AS tit_baixados`
+    );
+
+  const financeiro =
+    Number(fi.recordset[0]?.imediatos ?? 0) + Number(fi.recordset[0]?.tit_baixados ?? 0);
+
+  // 3) A receber = títulos ABERTO/PARCIAL do bloco aberto
+  const ar = await pool
+    .request()
+    .input("id", sql.Int, clienteId)
+    .query(
+      `;WITH open_bloco AS (
+        SELECT id FROM dbo.blocos WHERE cliente_id = @id AND status = 'ABERTO'
+      )
+      SELECT COALESCE(SUM(t.valor_bruto - t.valor_baixado), 0) AS a_receber
+      FROM open_bloco b
+      JOIN dbo.financeiro_titulos t ON t.bloco_id = b.id
+      WHERE t.status IN ('ABERTO','PARCIAL')`
+    );
+
+  const a_receber = Number(ar.recordset[0]?.a_receber ?? 0);
+
+  return {
+    saldo_bloco,
+    financeiro,
+    a_receber,
+    saldo: saldo_bloco + financeiro, // total (compatibilidade)
+  };
+}
+
+/* ========================= GET by ID ========================= */
+
 export const getClienteById = async (req: Request, res: Response) => {
   const { id } = req.params;
 
@@ -115,82 +164,20 @@ export const getClienteById = async (req: Request, res: Response) => {
     const clienteRs = await pool
       .request()
       .input("id", +id)
-      .query(`
-        SELECT id, nome_fantasia, grupo_empresa, tabela_preco, status, whatsapp, links_json, anotacoes, criado_em, atualizado_em, recebe_whatsapp
-        FROM clientes WHERE id = @id
-      `);
+      .query(
+        `SELECT id, nome_fantasia, grupo_empresa, tabela_preco, status, whatsapp, links_json, anotacoes, criado_em, atualizado_em, recebe_whatsapp
+         FROM clientes WHERE id = @id`
+      );
 
     if (clienteRs.recordset.length === 0) {
       return res.status(404).json({ message: "Cliente não encontrado" });
     }
 
-    // saldo aberto (ignora bom_para)
-    const saldoOpenRs = await pool
-      .request()
-      .input("id", +id)
-      .query(`
-        SELECT
-          COALESCE(SUM(
-            CASE
-              WHEN bl.bom_para IS NULL AND bl.sentido = 'SAIDA'   THEN bl.valor
-              WHEN bl.bom_para IS NULL AND bl.sentido = 'ENTRADA' THEN -bl.valor
-              ELSE 0
-            END
-          ), 0) AS saldo_aberto
-        FROM blocos b
-        LEFT JOIN bloco_lancamentos bl ON bl.bloco_id = b.id
-        WHERE b.cliente_id = @id
-          AND b.status = 'ABERTO'
-      `);
-    const saldo_aberto = Number(saldoOpenRs.recordset[0]?.saldo_aberto ?? 0);
-
-    const aReceberRs = await pool
-      .request()
-      .input("id", +id)
-      .query(`
-        SELECT COALESCE(SUM(valor_bruto - valor_baixado), 0) AS a_receber
-        FROM financeiro_titulos
-        WHERE cliente_id = @id
-          AND status IN ('ABERTO','PARCIAL')
-      `);
-    const a_receber = Number(aReceberRs.recordset[0]?.a_receber ?? 0);
-
-    // se não há bloco aberto, pega saldo do último fechado
-    let saldo_ultimo_fechado = 0;
-    if (saldo_aberto === 0) {
-      const lastClosed = await pool
-        .request()
-        .input("id", sql.Int, +id)
-        .query(`
-          SELECT TOP 1 b.id
-          FROM blocos b
-          WHERE b.cliente_id = @id AND b.status = 'FECHADO'
-          ORDER BY b.fechado_em DESC, b.id DESC
-        `);
-      if (lastClosed.recordset.length) {
-        const bid = Number(lastClosed.recordset[0].id);
-        const sRS = await pool
-          .request()
-          .input("bid", sql.Int, bid)
-          .query(`
-            SELECT
-              COALESCE(SUM(CASE WHEN sentido='SAIDA'   AND bom_para IS NULL THEN valor ELSE 0 END),0)
-            - COALESCE(SUM(CASE WHEN sentido='ENTRADA' AND bom_para IS NULL THEN valor ELSE 0 END),0) AS saldo
-            FROM bloco_lancamentos
-            WHERE bloco_id = @bid
-          `);
-        saldo_ultimo_fechado = Number(sRS.recordset[0]?.saldo ?? 0);
-      }
-    }
-
-    const cliente = clienteRs.recordset[0];
-    const saldo_total = saldo_aberto !== 0 ? saldo_aberto : saldo_ultimo_fechado;
+    const saldos = await calcularSaldosCliente(+id);
 
     return res.json({
-      ...cliente,
-      saldo_aberto,
-      a_receber,
-      saldo_total,
+      ...clienteRs.recordset[0],
+      ...saldos, // saldo_bloco, financeiro, a_receber, saldo
       transportadoras: [],
       documentos: [],
     });
@@ -200,74 +187,14 @@ export const getClienteById = async (req: Request, res: Response) => {
   }
 };
 
+/* ========================= Saldo isolado ========================= */
+
 export const getClienteSaldo = async (req: Request, res: Response) => {
   const { id } = req.params;
 
   try {
-    const abertoRs = await pool
-      .request()
-      .input("id", sql.Int, +id)
-      .query(`
-        SELECT
-          COALESCE(SUM(
-            CASE
-              WHEN bl.bom_para IS NULL AND bl.sentido = 'SAIDA'   THEN bl.valor
-              WHEN bl.bom_para IS NULL AND bl.sentido = 'ENTRADA' THEN -bl.valor
-              ELSE 0
-            END
-          ), 0) AS saldo_aberto
-        FROM blocos b
-        LEFT JOIN bloco_lancamentos bl ON bl.bloco_id = b.id
-        WHERE b.cliente_id = @id
-          AND b.status = 'ABERTO'
-      `);
-    const saldo_aberto = Number(abertoRs.recordset[0]?.saldo_aberto ?? 0);
-
-    const aReceberRs = await pool
-      .request()
-      .input("id", +id)
-      .query(`
-        SELECT COALESCE(SUM(valor_bruto - valor_baixado), 0) AS a_receber
-        FROM financeiro_titulos
-        WHERE cliente_id = @id
-          AND status IN ('ABERTO','PARCIAL')
-      `);
-    const a_receber = Number(aReceberRs.recordset[0]?.a_receber ?? 0);
-
-    let saldo_ultimo_fechado = 0;
-    if (saldo_aberto === 0) {
-      const lastClosed = await pool
-        .request()
-        .input("id", sql.Int, +id)
-        .query(`
-          SELECT TOP 1 b.id
-          FROM blocos b
-          WHERE b.cliente_id = @id AND b.status = 'FECHADO'
-          ORDER BY b.fechado_em DESC, b.id DESC
-        `);
-      if (lastClosed.recordset.length) {
-        const bid = Number(lastClosed.recordset[0].id);
-        const sRS = await pool
-          .request()
-          .input("bid", sql.Int, bid)
-          .query(`
-            SELECT
-              COALESCE(SUM(CASE WHEN sentido='SAIDA'   AND bom_para IS NULL THEN valor ELSE 0 END),0)
-            - COALESCE(SUM(CASE WHEN sentido='ENTRADA' AND bom_para IS NULL THEN valor ELSE 0 END),0) AS saldo
-            FROM bloco_lancamentos
-            WHERE bloco_id = @bid
-          `);
-        saldo_ultimo_fechado = Number(sRS.recordset[0]?.saldo ?? 0);
-      }
-    }
-
-    const saldo_total = saldo_aberto !== 0 ? saldo_aberto : saldo_ultimo_fechado;
-
-    return res.json({
-      saldo: saldo_total,
-      saldo_aberto,
-      a_receber,
-    });
+    const saldos = await calcularSaldosCliente(+id);
+    return res.json(saldos); // { saldo_bloco, financeiro, a_receber, saldo }
   } catch (error) {
     console.error("Erro em getClienteSaldo:", error);
     return res.status(500).json({ message: "Erro interno no servidor" });
@@ -284,21 +211,6 @@ const clienteSchema = z.object({
   whatsapp: z.string().nullish(),
   anotacoes: z.string().nullish(),
   links_json: z.string().nullish(),
-});
-
-const clienteDocumentoSchema = z.object({
-  doc_tipo: z.enum(["CNPJ", "CPF"]),
-  doc_numero: z.string().min(1, "Número do documento é obrigatório"),
-  principal: z.boolean().default(false),
-  modelo_nota: z.string().nullish(),
-  nome: z.string().nullish(),
-  tipo_nota: z.string().nullish(), // MEIA | INTEGRAL (ou vazio -> INTEGRAL)
-  percentual_nf: z.number().min(0).max(100).nullish(),
-});
-
-const linkSchema = z.object({
-  descricao: z.string().min(1, "Descrição é obrigatória"),
-  url: z.string().url("URL inválida"),
 });
 
 export const createCliente = async (req: Request, res: Response) => {
@@ -330,11 +242,11 @@ export const createCliente = async (req: Request, res: Response) => {
       .input("whatsapp", (data.whatsapp ?? null) as any)
       .input("anotacoes", (data.anotacoes ?? null) as any)
       .input("links_json", (data.links_json ?? null) as any)
-      .query(`
-        INSERT INTO clientes (nome_fantasia, grupo_empresa, tabela_preco, status, whatsapp, anotacoes, links_json, criado_em)
-        OUTPUT INSERTED.*
-        VALUES (@nome_fantasia, @grupo_empresa, @tabela_preco, @status, @whatsapp, @anotacoes, @links_json, SYSUTCDATETIME())
-      `);
+      .query(
+        `INSERT INTO clientes (nome_fantasia, grupo_empresa, tabela_preco, status, whatsapp, anotacoes, links_json, criado_em)
+         OUTPUT INSERTED.*
+         VALUES (@nome_fantasia, @grupo_empresa, @tabela_preco, @status, @whatsapp, @anotacoes, @links_json, SYSUTCDATETIME())`
+      );
 
     res.status(201).json({ message: "Cliente criado com sucesso!", data: result.recordset[0] });
   } catch (error) {
@@ -348,72 +260,6 @@ export const createCliente = async (req: Request, res: Response) => {
     res.status(500).json({ message: "Erro interno no servidor" });
   }
 };
-
-// export const updateCliente = async (req: Request, res: Response) => {
-//   const { id } = req.params;
-//   try {
-//     const data = z
-//       .object({
-//         nome_fantasia: z.string().optional(),
-//         grupo_empresa: z.string().nullish().optional(),
-//         tabela_preco: z.string().optional(),
-//         status: z.enum(["ATIVO", "INATIVO"]).optional(),
-//         whatsapp: z.string().nullish().optional(),
-//         anotacoes: z.string().nullish().optional(),
-//         links_json: z.string().nullish().optional(),
-//       })
-//       .partial()
-//       .parse(req.body as any);
-
-//     if ((data as any).nome_fantasia && (data as any).nome_fantasia.trim()) {
-//       const exists = await pool
-//         .request()
-//         .input("id", +id)
-//         .input("nome", (data as any).nome_fantasia.trim())
-//         .query(`SELECT TOP 1 id FROM clientes WHERE nome_fantasia = @nome AND id <> @id`);
-//       if (exists.recordset.length) {
-//         return res.status(409).json({ message: "Já existe outro cliente com este nome." });
-//       }
-//     }
-
-//     const sanitized: Record<string, any> = {};
-//     for (const [key, value] of Object.entries(req.body || {})) {
-//       if (key === "status" && typeof value === "string") {
-//         sanitized.status = value.toUpperCase() === "INATIVO" ? "INATIVO" : "ATIVO";
-//       } else if (["grupo_empresa", "whatsapp", "anotacoes", "links_json"].includes(key)) {
-//         sanitized[key] = value ?? null;
-//       } else {
-//         sanitized[key] = value;
-//       }
-//     }
-
-//     const fields = Object.keys(sanitized).map((k) => `${k} = @${k}`).join(", ");
-//     if (!fields) return res.status(400).json({ message: "Nenhum campo para atualizar" });
-
-//     const request = pool.request().input("id", +id);
-//     Object.entries(sanitized).forEach(([k, v]) => request.input(k, v ?? null));
-
-//     const result = await request.query(`
-//       UPDATE clientes SET ${fields}, atualizado_em = SYSUTCDATETIME()
-//       OUTPUT INSERTED.*
-//       WHERE id = @id
-//     `);
-
-//     if (result.recordset.length === 0)
-//       return res.status(404).json({ message: "Cliente não encontrado" });
-//     res.json({ message: "Cliente atualizado com sucesso!", data: result.recordset[0] });
-//   } catch (error) {
-//     if (error instanceof z.ZodError) {
-//       return res.status(400).json({
-//         message: "Erro de validação",
-//         errors: error.errors.map((e) => ({ path: e.path.join("."), message: e.message })),
-//       });
-//     }
-//     console.error("Erro ao atualizar cliente:", error);
-//     res.status(500).json({ message: "Erro interno no servidor" });
-//   }
-// };
-
 
 export const updateCliente = async (req: Request, res: Response) => {
   const { id } = req.params;
@@ -439,13 +285,9 @@ export const updateCliente = async (req: Request, res: Response) => {
         .request()
         .input("id", +id)
         .input("nome", body.nome_fantasia.trim())
-        .query(
-          `SELECT TOP 1 id FROM clientes WHERE nome_fantasia = @nome AND id <> @id`
-        );
+        .query(`SELECT TOP 1 id FROM clientes WHERE nome_fantasia = @nome AND id <> @id`);
       if (dup.recordset.length) {
-        return res
-          .status(409)
-          .json({ message: "Já existe outro cliente com este nome." });
+        return res.status(409).json({ message: "Já existe outro cliente com este nome." });
       }
     }
 
@@ -507,12 +349,12 @@ export const updateCliente = async (req: Request, res: Response) => {
     const dbReq = pool.request().input("id", +id);
     Object.entries(sanitized).forEach(([k, v]) => dbReq.input(k, v));
 
-    const result = await dbReq.query(`
-      UPDATE clientes
+    const result = await dbReq.query(
+      `UPDATE clientes
          SET ${setSql}, atualizado_em = SYSUTCDATETIME()
        OUTPUT INSERTED.*
-       WHERE id = @id
-    `);
+       WHERE id = @id`
+    );
 
     if (!result.recordset.length) {
       return res.status(404).json({ message: "Cliente não encontrado" });
@@ -543,11 +385,11 @@ export const deleteCliente = async (req: Request, res: Response) => {
     const result = await pool
       .request()
       .input("id", +id)
-      .query(`
-        UPDATE clientes
-        SET status = 'INATIVO', atualizado_em = SYSUTCDATETIME()
-        WHERE id = @id
-      `);
+      .query(
+        `UPDATE clientes
+         SET status = 'INATIVO', atualizado_em = SYSUTCDATETIME()
+         WHERE id = @id`
+      );
 
     if ((result.rowsAffected?.[0] ?? 0) === 0) {
       return res.status(404).json({ message: "Cliente não encontrado" });
@@ -602,6 +444,7 @@ export const createClienteDocumento = async (req: Request, res: Response) => {
   const { cliente_id } = req.params;
 
   // atalho: anexar link
+  const linkSchema = z.object({ descricao: z.string().min(1), url: z.string().url() });
   const _linkParse = linkSchema.safeParse(req.body);
   if (_linkParse.success) {
     try {
@@ -628,10 +471,48 @@ export const createClienteDocumento = async (req: Request, res: Response) => {
   }
 
   try {
+    const clienteDocumentoSchema = z.object({
+      doc_tipo: z.enum(["CNPJ", "CPF"]),
+      doc_numero: z.string().min(1),
+      principal: z.boolean().default(false),
+      modelo_nota: z.string().nullish(),
+      nome: z.string().nullish(),
+      tipo_nota: z.string().nullish(),
+      percentual_nf: z.number().min(0).max(100).nullish(),
+    });
+
     const data = clienteDocumentoSchema.parse(req.body);
 
     // valida doc e normaliza
     const numero = onlyDigits(data.doc_numero);
+    const isValidCPF = (cpf: string) => {
+      const s = onlyDigits(cpf);
+      if (s.length !== 11 || /^(\d)\1+$/.test(s)) return false;
+      let sum = 0, rest = 0;
+      for (let i = 1; i <= 9; i++) sum += parseInt(s.substring(i - 1, i)) * (11 - i);
+      rest = (sum * 10) % 11; if (rest >= 10) rest = 0;
+      if (rest !== parseInt(s.substring(9, 10))) return false;
+      sum = 0;
+      for (let i = 1; i <= 10; i++) sum += parseInt(s.substring(i - 1, i)) * (12 - i);
+      rest = (sum * 10) % 11; if (rest >= 10) rest = 0;
+      return rest === parseInt(s.substring(10, 11));
+    };
+    const isValidCNPJ = (cnpj: string) => {
+      const s = onlyDigits(cnpj);
+      if (s.length !== 14 || /^(\d)\1+$/.test(s)) return false;
+      const calc = (arr: number[]) => {
+        let sum = 0;
+        const w = arr.length === 12 ? [5,4,3,2,9,8,7,6,5,4,3,2] : [6,5,4,3,2,9,8,7,6,5,4,3,2];
+        arr.forEach((v, i) => (sum += v * w[i]));
+        const mod = sum % 11;
+        return mod < 2 ? 0 : 11 - mod;
+      };
+      const n = s.split("").map(Number);
+      const d1 = calc(n.slice(0, 12));
+      const d2 = calc(n.slice(0, 12).concat(d1));
+      return d1 === n[12] && d2 === n[13];
+    };
+
     if (data.doc_tipo === "CPF" && !isValidCPF(numero))
       return res.status(400).json({ message: "CPF inválido" });
     if (data.doc_tipo === "CNPJ" && !isValidCNPJ(numero))
@@ -657,12 +538,12 @@ export const createClienteDocumento = async (req: Request, res: Response) => {
         .input("tipo_nota", sql.VarChar(10), mapTipoNotaDb(data.tipo_nota))            // MEIA|INTEGRAL
         .input("percentual_nf", sql.Decimal(5, 2), data.percentual_nf == null ? null : Number(data.percentual_nf));
 
-      const result = await reqDb.query(`
-        INSERT INTO cliente_documentos
-          (cliente_id, doc_tipo, doc_numero, principal, modelo_nota, nome, tipo_nota, percentual_nf)
-        OUTPUT INSERTED.*
-        VALUES (@cliente_id, @doc_tipo, @doc_numero, @principal, @modelo_nota, @nome, @tipo_nota, @percentual_nf)
-      `);
+      const result = await reqDb.query(
+        `INSERT INTO cliente_documentos
+           (cliente_id, doc_tipo, doc_numero, principal, modelo_nota, nome, tipo_nota, percentual_nf)
+         OUTPUT INSERTED.*
+         VALUES (@cliente_id, @doc_tipo, @doc_numero, @principal, @modelo_nota, @nome, @tipo_nota, @percentual_nf)`
+      );
 
       await tx.commit();
       return res.status(201).json(result.recordset[0]);
@@ -689,10 +570,19 @@ export const createClienteDocumento = async (req: Request, res: Response) => {
 export const updateClienteDocumento = async (req: Request, res: Response) => {
   const { cliente_id, id } = req.params;
   try {
-    const data = clienteDocumentoSchema.partial().parse(req.body);
+    const clienteDocumentoSchema = z.object({
+      doc_tipo: z.enum(["CNPJ", "CPF"]).optional(),
+      doc_numero: z.string().min(1).optional(),
+      principal: z.boolean().optional(),
+      modelo_nota: z.string().nullish().optional(),
+      nome: z.string().nullish().optional(),
+      tipo_nota: z.string().nullish().optional(),
+      percentual_nf: z.number().min(0).max(100).nullish().optional(),
+    });
+
+    const data = clienteDocumentoSchema.parse(req.body);
 
     const sanitized: Record<string, any> = { ...data };
-
     if ("doc_numero" in sanitized) sanitized.doc_numero = onlyDigits(String(sanitized.doc_numero ?? ""));
     if ("modelo_nota" in sanitized) sanitized.modelo_nota = String(sanitized.modelo_nota ?? "").trim();
     if ("nome" in sanitized) sanitized.nome = String(sanitized.nome ?? "").trim();
@@ -726,12 +616,12 @@ export const updateClienteDocumento = async (req: Request, res: Response) => {
         else reqDb.input(k, v as any);
       }
 
-      const result = await reqDb.query(`
-        UPDATE cliente_documentos
-        SET ${fields}
-        OUTPUT INSERTED.*
-        WHERE id = @id AND cliente_id = @cliente_id
-      `);
+      const result = await reqDb.query(
+        `UPDATE cliente_documentos
+         SET ${fields}
+         OUTPUT INSERTED.*
+         WHERE id = @id AND cliente_id = @cliente_id`
+      );
 
       await tx.commit();
 
@@ -815,13 +705,13 @@ export const setClienteTransportadoras = async (req: Request, res: Response) => 
     const vinculos = await pool
       .request()
       .input("id", +id)
-      .query(`
-        SELECT t.id, t.razao_social, t.cnpj, t.telefone, t.forma_envio, t.ativo
-        FROM cliente_transportadoras ct
-        JOIN transportadoras t ON t.id = ct.transportadora_id
-        WHERE ct.cliente_id = @id
-        ORDER BY t.razao_social
-      `);
+      .query(
+        `SELECT t.id, t.razao_social, t.cnpj, t.telefone, t.forma_envio, t.ativo
+         FROM cliente_transportadoras ct
+         JOIN transportadoras t ON t.id = ct.transportadora_id
+         WHERE ct.cliente_id = @id
+         ORDER BY t.razao_social`
+      );
 
     return res.json({ message: "Transportadoras atualizadas", transportadoras: vinculos.recordset });
   } catch (error) {

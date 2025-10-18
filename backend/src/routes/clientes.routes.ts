@@ -1,9 +1,9 @@
 import { Router } from "express";
 import { protect, authorize } from "../middleware/auth.middleware";
 
-// importe tudo do controller principal como namespace
+// controller principal
 import * as clientesCtrl from "../controllers/clientes.controller";
-// e os handlers específicos de transportadoras<->clientes
+// handlers granulares de transportadoras<->clientes
 import {
   listarDoCliente as listarTransportadorasDoCliente,
   vincular as vincularTransportadora,
@@ -26,14 +26,14 @@ router
   .put(authorize("admin", "financeiro"), clientesCtrl.updateCliente)
   .delete(authorize("admin"), clientesCtrl.deleteCliente);
 
-/** Saldo isolado (usado pelo ClienteDetalhes.tsx) */
+/** Saldo isolado */
 router.get(
   "/:id/saldo",
   authorize("admin", "financeiro", "vendedor"),
   clientesCtrl.getClienteSaldo
 );
 
-/** Vinculação de transportadoras (múltiplas por cliente) */
+/** Transportadoras (granular) */
 router
   .route("/:id/transportadoras")
   .get(authorize("admin", "financeiro", "vendedor"), listarTransportadorasDoCliente)

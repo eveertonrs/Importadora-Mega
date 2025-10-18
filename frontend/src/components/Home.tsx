@@ -7,13 +7,23 @@ import Button from "./ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
 import Badge from "./ui/badge";
 
-/** ======================= helpers ======================= */
+/** ======================= types & helpers ======================= */
 type BlocoItem = {
   id: number;
   codigo: string;
   cliente?: string;
   status: "ABERTO" | "FECHADO";
   aberto_em?: string;
+};
+
+type SaldosBloco = {
+  // nomes possíveis que já vimos no projeto
+  saldo_bloco?: number;         // ENTRADA – SAÍDA (indep. do bom_para)
+  saldo_financeiro?: number;    // imediatos + baixados (ignora bom_para em aberto)
+  a_receber?: number;
+  // fallback (caso backend mude)
+  saldo?: number;
+  saldo_imediato?: number;
 };
 
 const currency = (n: number) =>
@@ -40,6 +50,11 @@ const formatDateTime = (iso?: string) =>
         minute: "2-digit",
       })
     : undefined;
+
+function safeNumber(v: any) {
+  const n = Number(v);
+  return Number.isFinite(n) ? n : 0;
+}
 
 /** ======================= pequenos componentes ======================= */
 
@@ -95,6 +110,44 @@ function Shortcut({ to, label, icon }: { to: string; label: string; icon: React.
   );
 }
 
+/** ======== micro chart (SVG) – barras do saldo financeiro dos 5 blocos ======== */
+function BarsChart({
+  data,
+  width = 420,
+  height = 120,
+}: {
+  data: number[];
+  width?: number;
+  height?: number;
+}) {
+  if (!data.length) return null;
+
+  // escala
+  const maxAbs = Math.max(1, ...data.map((v) => Math.abs(v)));
+  const midY = height / 2;
+  const barW = Math.max(6, Math.floor((width - 24) / data.length) - 8);
+
+  return (
+    <svg width={width} height={height} className="block">
+      {/* eixo central */}
+      <line x1="0" y1={midY} x2={width} y2={midY} stroke="#e2e8f0" />
+      {data.map((v, i) => {
+        const x = 12 + i * (barW + 8);
+        const h = (Math.abs(v) / maxAbs) * (height / 2 - 12);
+        const isPos = v >= 0;
+        const y = isPos ? midY - h : midY;
+        // cores suaves acessíveis
+        const fill = isPos ? "#10b981" : "#ef4444";
+        return (
+          <g key={i}>
+            <rect x={x} y={y} width={barW} height={h} rx="3" fill={fill} opacity="0.85" />
+          </g>
+        );
+      })}
+    </svg>
+  );
+}
+
 /** ======================= página ======================= */
 
 export default function Home() {
@@ -102,8 +155,10 @@ export default function Home() {
 
   const [clientesTotal, setClientesTotal] = useState<number>(0);
   const [blocosAbertosTotal, setBlocosAbertosTotal] = useState<number>(0);
-  const [saldoTop5, setSaldoTop5] = useState<number>(0); // saldo imediato (ignora bom_para)
+  const [saldoTop5, setSaldoTop5] = useState<number>(0); // saldo financeiro (ignora bom_para aberto)
+  const [aReceberTop5, setAReceberTop5] = useState<number>(0);
   const [blocosRecentes, setBlocosRecentes] = useState<BlocoItem[]>([]);
+  const [bars, setBars] = useState<number[]>([]); // para o gráfico
 
   const [loading, setLoading] = useState<boolean>(true);
   const [err, setErr] = useState<string | null>(null);
@@ -132,17 +187,35 @@ export default function Home() {
       setBlocosRecentes(lista);
       setBlocosAbertosTotal(extractTotal(respBlocos));
 
-      // 3) saldo imediato dos top 5 (IGNORA bom_para).
-      // Usa o endpoint novo /blocos/:id/saldos -> { saldo, a_receber }
-      const saldosResp = await Promise.all(
-        lista.map((b) => api.get(`/blocos/${b.id}/saldos`))
+      // 3) saldos de cada um dos 5 blocos
+      //    usamos saldo_financeiro (imediatos + baixados) como “ignora bom_para em aberto”
+      const saldosResp = await Promise.allSettled(
+        lista.map((b) => api.get(`/blocos/${b.id}/saldos`, { headers: { "x-silent": "1" } }))
       );
-      const somaSaldoImediato = saldosResp.reduce((acc, r) => {
-        const raw = r?.data ?? {};
-        const val = Number((raw as any).saldo ?? 0);
-        return acc + (isFinite(val) ? val : 0);
-      }, 0);
-      setSaldoTop5(somaSaldoImediato);
+
+      const financiarios: number[] = [];
+      const receberArr: number[] = [];
+
+      saldosResp.forEach((r) => {
+        if (r.status !== "fulfilled") {
+          financiarios.push(0);
+          receberArr.push(0);
+          return;
+        }
+        const raw = (r.value?.data ?? {}) as SaldosBloco;
+        const fin =
+          safeNumber(raw.saldo_financeiro) ||
+          safeNumber(raw.saldo_imediato) ||
+          // fallback (se algum back antigo mandar “saldo” como financeiro)
+          (raw.saldo !== undefined && safeNumber(raw.saldo)) ||
+          0;
+        financiarios.push(fin);
+        receberArr.push(safeNumber(raw.a_receber));
+      });
+
+      setBars(financiarios);
+      setSaldoTop5(financiarios.reduce((acc, n) => acc + n, 0));
+      setAReceberTop5(receberArr.reduce((acc, n) => acc + n, 0));
     } catch (e: any) {
       console.error("Erro no dashboard:", e);
       const msg = e?.response?.data?.message || e?.message || "Falha ao carregar o dashboard.";
@@ -157,8 +230,8 @@ export default function Home() {
   }, [carregarDashboard]);
 
   const resumo = useMemo(
-    () => ({ clientes: clientesTotal, blocosAbertos: blocosAbertosTotal, saldoTop5 }),
-    [clientesTotal, blocosAbertosTotal, saldoTop5]
+    () => ({ clientes: clientesTotal, blocosAbertos: blocosAbertosTotal, saldoTop5, aReceberTop5 }),
+    [clientesTotal, blocosAbertosTotal, saldoTop5, aReceberTop5]
   );
 
   const saldoClass = resumo.saldoTop5 >= 0 ? "text-emerald-600" : "text-rose-600";
@@ -201,7 +274,7 @@ export default function Home() {
       )}
 
       {/* métricas */}
-      <section className="grid grid-cols-1 gap-6 md:grid-cols-3">
+      <section className="grid grid-cols-1 gap-6 xl:grid-cols-4 md:grid-cols-2">
         <MetricCard
           title="Clientes"
           icon="👥"
@@ -226,17 +299,54 @@ export default function Home() {
           title="Saldo imediato (top 5 blocos)"
           icon="💰"
           loading={loading}
-          tooltip="Somatório do saldo IMEDIATO dos 5 blocos mais recentes (ENTRADA – SAÍDA, ignorando lançamentos com 'bom_para')."
+          tooltip="Somatório do saldo FINANCEIRO dos 5 blocos mais recentes (imediatos + baixados — ignora lançamentos com 'bom_para')."
           value={
             <div>
               <p className={`text-4xl font-extrabold ${saldoClass}`}>{currency(resumo.saldoTop5)}</p>
-              <p className="mt-1 text-xs text-slate-500">
-                ENTRADA – SAÍDA (ignora 'bom_para')
-              </p>
+              <p className="mt-1 text-xs text-slate-500">Imediatos + baixados (sem 'bom_para')</p>
             </div>
           }
           aria-live="polite"
         />
+
+        <MetricCard
+          title="A receber (top 5 blocos)"
+          icon="📥"
+          loading={loading}
+          tooltip="Total em títulos ABERTOS/PARCIAIS dos 5 blocos mais recentes."
+          value={<p className="text-4xl font-bold text-amber-700">{currency(resumo.aReceberTop5)}</p>}
+          linkTo="/financeiro/receber"
+          linkText="Ver financeiro"
+          aria-live="polite"
+        />
+      </section>
+
+      {/* gráfico rápido */}
+      <section>
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-slate-600">Saldo financeiro dos 5 blocos recentes</CardTitle>
+          </CardHeader>
+          <CardContent className="pt-1">
+            {loading ? (
+              <SkeletonBox className="h-32 w-full" />
+            ) : bars.length ? (
+              <div className="overflow-x-auto">
+                <BarsChart data={bars} />
+                <div className="mt-2 flex items-center gap-3 text-xs text-slate-500">
+                  <span className="inline-flex items-center gap-1">
+                    <span className="inline-block h-2 w-2 rounded bg-emerald-500" /> positivo
+                  </span>
+                  <span className="inline-flex items-center gap-1">
+                    <span className="inline-block h-2 w-2 rounded bg-rose-500" /> negativo
+                  </span>
+                </div>
+              </div>
+            ) : (
+              <div className="text-slate-500">Sem dados para exibir.</div>
+            )}
+          </CardContent>
+        </Card>
       </section>
 
       {/* atalhos essenciais */}
@@ -281,10 +391,18 @@ export default function Home() {
                   {loading &&
                     Array.from({ length: 3 }).map((_, i) => (
                       <tr key={`sk-${i}`} className="border-b last:border-0">
-                        <td className="px-4 py-3"><SkeletonBox className="h-4 w-48" /></td>
-                        <td className="px-4 py-3"><SkeletonBox className="h-6 w-20 rounded-full" /></td>
-                        <td className="px-4 py-3"><SkeletonBox className="h-4 w-36" /></td>
-                        <td className="px-4 py-3"><SkeletonBox className="h-4 w-14" /></td>
+                        <td className="px-4 py-3">
+                          <SkeletonBox className="h-4 w-48" />
+                        </td>
+                        <td className="px-4 py-3">
+                          <SkeletonBox className="h-6 w-20 rounded-full" />
+                        </td>
+                        <td className="px-4 py-3">
+                          <SkeletonBox className="h-4 w-36" />
+                        </td>
+                        <td className="px-4 py-3">
+                          <SkeletonBox className="h-4 w-14" />
+                        </td>
                       </tr>
                     ))}
 
