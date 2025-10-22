@@ -18,7 +18,6 @@ type Doc = {
   doc_tipo: "CNPJ" | "CPF" | string;
   doc_numero: string;
   principal?: boolean;
-  // modelo_nota removido da UI
   percentual_nf?: number | null;
   tipo_nota?: "MEIA" | "INTEGRAL";
 };
@@ -63,7 +62,7 @@ const toneOf = (v: number) => {
   return "from-slate-50 to-white ring-slate-200 text-slate-700";
 };
 
-// máscaras rápidas para exibição
+// máscaras rápidas
 const onlyDigits = (s: string) => (s || "").replace(/\D/g, "");
 const formatCpf = (v: string) => {
   const d = onlyDigits(v).slice(0, 11);
@@ -83,6 +82,13 @@ const formatCnpj = (v: string) => {
 const formatDoc = (tipo?: string, num?: string) =>
   !num ? "—" : tipo === "CPF" ? formatCpf(num) : tipo === "CNPJ" ? formatCnpj(num) : num;
 
+/** Regras do card Financeiro (conforme combinado):
+ *  Financeiro = débito do(s) bloco(s) aberto(s) + A Receber
+ *  débito do bloco = apenas a parte negativa do saldo_do_bloco (positivo não entra)
+ */
+const calcularFinanceiro = (saldoBloco: number, aReceber: number) =>
+  Math.max(0, -Number(saldoBloco || 0)) + Number(aReceber || 0);
+
 /* ===================== Componente ===================== */
 export default function ClienteDetalhes() {
   const { id } = useParams<{ id: string }>();
@@ -91,7 +97,7 @@ export default function ClienteDetalhes() {
   const [cli, setCli] = useState<Cliente | null>(null);
   const [loading, setLoading] = useState(true);
 
-  // saldos (mesma lógica do Bloco)
+  // saldos (consolidados por cliente — independem da qtde de blocos)
   const [saldoBloco, setSaldoBloco] = useState<number>(0);
   const [financeiro, setFinanceiro] = useState<number>(0);
   const [aReceber, setAReceber] = useState<number>(0);
@@ -152,9 +158,16 @@ export default function ClienteDetalhes() {
     try {
       setSaldoLoading(true);
       const { data } = await api.get(`/clientes/${id}/saldo`, { headers: { "x-silent": "1" } });
-      setSaldoBloco(Number(data?.saldo_bloco ?? 0));
-      setFinanceiro(Number(data?.financeiro ?? 0));
-      setAReceber(Number(data?.a_receber ?? 0));
+
+      const sb = Number(data?.saldo_bloco ?? 0);
+      const ar = Number(data?.a_receber ?? 0);
+
+      setSaldoBloco(sb);
+      setAReceber(ar);
+
+      // IMPORTANTE: ignora qualquer "financeiro" legado do backend e
+      // aplica a regra definida (débito do bloco + a receber)
+      setFinanceiro(calcularFinanceiro(sb, ar));
     } catch {
       setSaldoBloco(0);
       setFinanceiro(0);
@@ -278,7 +291,6 @@ export default function ClienteDetalhes() {
               {cli.nome_fantasia} <span className="text-slate-300">#{cli.id}</span>
             </h1>
 
-            {/* Informações rápidas */}
             <div className="mt-1 text-sm text-slate-300">
               {docPrincipal ? (
                 <>
@@ -304,7 +316,7 @@ export default function ClienteDetalhes() {
               className={`rounded-2xl bg-gradient-to-br px-4 py-3 ring-1 ${toneOf(
                 saldoBloco
               )} shadow-sm`}
-              title="Soma de todas as movimentações do(s) bloco(s) ABERTO(s) (SAÍDA + / ENTRADA −), ignorando cancelados."
+              title="Soma de todas as movimentações dos blocos ABERTOS (SAÍDA + / ENTRADA −), ignorando cancelados."
             >
               <div className="text-xs text-slate-700/80">Saldo do bloco</div>
               <div className="text-2xl font-bold tracking-tight">
@@ -316,7 +328,7 @@ export default function ClienteDetalhes() {
               className={`rounded-2xl bg-gradient-to-br px-4 py-3 ring-1 ${toneOf(
                 financeiro
               )} shadow-sm`}
-              title="Lançamentos imediatos (bom_para = NULL) no bloco aberto + títulos BAIXADOS do bloco."
+              title="(Regra da tela) Financeiro = débito do bloco (se negativo) + A Receber."
             >
               <div className="text-xs text-slate-700/80">Financeiro</div>
               <div className="text-2xl font-bold tracking-tight">
@@ -326,7 +338,7 @@ export default function ClienteDetalhes() {
 
             <div
               className="rounded-2xl bg-gradient-to-br from-amber-50 to-yellow-50 ring-1 ring-amber-200 text-amber-900 px-4 py-3 shadow-sm"
-              title="Títulos em ABERTO/PARCIAL do bloco aberto."
+              title="TODOS os títulos do cliente em ABERTO/PARCIAL (qualquer bloco)."
             >
               <div className="text-xs">A receber</div>
               <div className="text-2xl font-bold tracking-tight">

@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import api from "../services/api";
 import { ensureClientNames, getClientName } from "../utils/clientNameCache";
 
-/* ===== ÍCONES INLINE (sem libs) ===== */
+/* ==================== ÍCONES INLINE ==================== */
 function IconSearch({ size = 16, className = "" }: { size?: number; className?: string }) {
   return (
     <svg className={className} width={size} height={size} viewBox="0 0 24 24" fill="none"
@@ -30,19 +30,30 @@ function IconRefresh({ size = 18, className = "" }: { size?: number; className?:
   );
 }
 
-/* ===== tipos ===== */
-type Row = {
+/* ==================== Tipos ==================== */
+type RowAPI = {
   id: number;
   cliente_id: number;
-  valor: number;                 // + entrada / - saída
+  valor: number;                   // pode vir sempre positivo no backend
   forma_pagamento: string;
-  criado_em: string;             // ISO
+  criado_em: string;               // ISO
   observacao?: string | null;
   cliente_nome?: string | null;
+
+  // alguns backends já mandam a direção:
+  tipo?: string | null;            // "ENTRADA" | "SAIDA"
+  natureza?: string | null;        // "ENTRADA" | "SAIDA" | "E" | "S"
+  movimento?: string | null;       // idem
 };
+
+type Row = RowAPI & {
+  valor_assinado: number;          // +entrada / -saída (normalizado)
+  direcao: "ENTRADA" | "SAIDA";
+};
+
 type Cliente = { id: number; nome_fantasia: string };
 
-/* ===== helpers ===== */
+/* ==================== Helpers ==================== */
 const money = (n: number) => Number(n || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 const dtBR = (d: string | Date) =>
   new Date(d).toLocaleString("pt-BR", { day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" });
@@ -55,27 +66,66 @@ const formaTone = (f: string) => {
   if (s.includes("PIX") || s.includes("DINHEIRO")) return "emerald";
   if (s.includes("BOLETO")) return "indigo";
   if (s.includes("CHEQUE")) return "sky";
+  if (s.includes("ESTORNO") || s.includes("DEVOL") || s.includes("TROCO")) return "rose";
   if (s.includes("SALDO")) return "slate";
   return "amber";
 };
-function Badge({ tone, children }: { tone: "emerald" | "indigo" | "sky" | "slate" | "amber"; children: React.ReactNode }) {
+
+function Badge({ tone, children }: { tone: "emerald" | "indigo" | "sky" | "slate" | "amber" | "rose"; children: React.ReactNode }) {
   const cls =
     tone === "emerald" ? "bg-emerald-50 text-emerald-700 ring-emerald-200"
     : tone === "indigo" ? "bg-indigo-50 text-indigo-700 ring-indigo-200"
     : tone === "sky" ? "bg-sky-50 text-sky-700 ring-sky-200"
+    : tone === "rose" ? "bg-rose-50 text-rose-700 ring-rose-200"
     : tone === "amber" ? "bg-amber-50 text-amber-700 ring-amber-200"
     : "bg-slate-50 text-slate-700 ring-slate-200";
   return <span className={`inline-flex items-center rounded-full px-2 py-0.5 text-[11px] font-medium ring-1 ${cls}`}>{children}</span>;
 }
+
 function useDebounce<T>(value: T, ms = 300) {
   const [v, setV] = useState(value);
   useEffect(() => { const t = setTimeout(() => setV(value), ms); return () => clearTimeout(t); }, [value, ms]);
   return v;
 }
 
-/* ===== componente ===== */
+function looksLikeSaida(row: RowAPI) {
+  const t = (row.tipo || row.natureza || row.movimento || "").toString().toUpperCase();
+  if (t === "SAIDA" || t === "S") return true;
+  if (t === "ENTRADA" || t === "E") return false;
+
+  const obs = (row.observacao || "").toUpperCase();
+  if (obs.includes("BAIXA")) return true;
+  if (obs.includes("ESTORNO")) return true;
+  if (obs.includes("DEVOLU")) return true;
+
+  const forma = (row.forma_pagamento || "").toUpperCase();
+  if (forma.includes("ESTORNO") || forma.includes("TROCO")) return true;
+
+  return false;
+}
+
+function normalizeRow(r: RowAPI): Row {
+  // se já vier assinado do backend, preserva; senão, decide pelo tipo/obs
+  let signed = Number(r.valor) || 0;
+  let direcao: "ENTRADA" | "SAIDA" = signed < 0 ? "SAIDA" : "ENTRADA";
+
+  if (signed >= 0) {
+    if (looksLikeSaida(r)) {
+      signed = -Math.abs(signed);
+      direcao = "SAIDA";
+    } else {
+      direcao = "ENTRADA";
+    }
+  } else {
+    direcao = "SAIDA";
+  }
+
+  return { ...r, valor_assinado: signed, direcao };
+}
+
+/* ==================== Componente ==================== */
 export default function HistoricoPagamentos() {
-  // dados crus (último fetch) e dados filtrados para exibir
+  // dados crus (normalizados) e dados filtrados para exibir
   const [sourceRows, setSourceRows] = useState<Row[]>([]);
   const [rows, setRows] = useState<Row[]>([]);
   const [loading, setLoading] = useState(false);
@@ -89,11 +139,13 @@ export default function HistoricoPagamentos() {
   const [cliOpen, setCliOpen] = useState(false);
   const cliRef = useRef<HTMLDivElement>(null);
 
-  // busca e período
+  // busca, período, tipo e ordenação
   const [q, setQ] = useState("");
   const [from, setFrom] = useState("");
   const [to, setTo] = useState("");
   const [range, setRange] = useState<"today" | "7d" | "30d" | "month" | "all" | null>(null);
+  const [tipoFilter, setTipoFilter] = useState<"ALL" | "ENTRADA" | "SAIDA">("ALL");
+  const [sort, setSort] = useState<"date_desc" | "date_asc" | "value_desc" | "value_asc">("date_desc");
 
   useEffect(() => {
     function close(e: MouseEvent) { if (!cliRef.current?.contains(e.target as Node)) setCliOpen(false); }
@@ -119,17 +171,22 @@ export default function HistoricoPagamentos() {
   function selectCliente(c: Cliente) { setClienteInput(c.nome_fantasia); setClienteId(c.id); setCliOpen(false); }
   function clearCliente() { setClienteInput(""); setClienteId(""); setCliOpts([]); setCliOpen(false); }
 
-  // ---- fetch cru + resolver nomes
+  // ---- fetch cru + resolver nomes + normalizar entradas/saídas
   async function reload() {
     setLoading(true); setError(null);
     try {
-      const { data } = await api.get("/pagamentos/historico"); // sem filtros -> traz tudo
-      const list: Row[] = data?.data ?? data ?? [];
-      const ids = Array.from(new Set(list.map((r) => Number(r.cliente_id)).filter(Boolean)));
+      const { data } = await api.get("/pagamentos/historico"); // traz tudo
+      const listAPI: RowAPI[] = data?.data ?? data ?? [];
+      const ids = Array.from(new Set(listAPI.map((r) => Number(r.cliente_id)).filter(Boolean)));
       await ensureClientNames(ids);
-      const resolved = list.map((r) => ({ ...r, cliente_nome: getClientName(r.cliente_id, r.cliente_nome) }));
-      setSourceRows(resolved);
-      applyFilters(resolved); // aplica filtros atuais
+
+      const normalized: Row[] = listAPI.map((r) => {
+        const n = normalizeRow(r);
+        return { ...n, cliente_nome: getClientName(n.cliente_id, n.cliente_nome) };
+      });
+
+      setSourceRows(normalized);
+      applyFilters(normalized); // aplica filtros atuais
     } catch (e: any) {
       setError(e?.response?.data?.message || "Falha ao carregar histórico.");
     } finally { setLoading(false); }
@@ -137,11 +194,15 @@ export default function HistoricoPagamentos() {
   useEffect(() => { reload(); }, []); // primeira carga
 
   // ---- aplica filtros no front (inclusivo por dia)
-  function applyFilters(base: Row[] = sourceRows, opts?: Partial<{from: string; to: string; clienteId: number | ""; q: string;}>) {
+  function applyFilters(base: Row[] = sourceRows, opts?: Partial<{
+    from: string; to: string; clienteId: number | ""; q: string; tipo: "ALL"|"ENTRADA"|"SAIDA"; sort: typeof sort;
+  }>) {
     const f = (opts?.from ?? from) || "";
     const t = (opts?.to ?? to) || "";
     const cid = opts?.clienteId ?? clienteId;
     const qq = (opts?.q ?? q).trim().toLowerCase();
+    const tipo = opts?.tipo ?? tipoFilter;
+    const ord  = opts?.sort ?? sort;
 
     const fromTS = f ? new Date(`${f}T00:00:00`).getTime() : -Infinity;
     const toTS   = t ? new Date(`${t}T23:59:59.999`).getTime() : Infinity;
@@ -150,11 +211,20 @@ export default function HistoricoPagamentos() {
       const ts = new Date(r.criado_em).getTime();
       if (ts < fromTS || ts > toTS) return false;
       if (cid !== "" && Number(r.cliente_id) !== Number(cid)) return false;
+      if (tipo !== "ALL" && r.direcao !== tipo) return false;
       if (qq) {
         const hay = ((r.observacao || "") + " " + (r.forma_pagamento || "")).toLowerCase();
         if (!hay.includes(qq)) return false;
       }
       return true;
+    });
+
+    // ordenação
+    filtered.sort((a, b) => {
+      if (ord === "date_desc") return +new Date(b.criado_em) - +new Date(a.criado_em);
+      if (ord === "date_asc")  return +new Date(a.criado_em) - +new Date(b.criado_em);
+      if (ord === "value_desc") return Math.abs(b.valor_assinado) - Math.abs(a.valor_assinado);
+      return Math.abs(a.valor_assinado) - Math.abs(b.valor_assinado);
     });
 
     setRows(filtered);
@@ -186,28 +256,56 @@ export default function HistoricoPagamentos() {
     }
   }
 
-  // se alterar datas, limpa chip ativo (e usa botão Filtrar)
+  // alterações manuais limpam chip ativo (usa botão Filtrar)
   function onChangeFrom(v: string) { setFrom(v); setRange(null); }
   function onChangeTo(v: string) { setTo(v); setRange(null); }
 
   // métricas do que está sendo exibido (filtrado)
   const stats = useMemo(() => {
-    const entradas = rows.filter((r) => r.valor >= 0);
-    const saidas = rows.filter((r) => r.valor < 0);
+    const entradas = rows.filter((r) => r.valor_assinado >= 0);
+    const saídas   = rows.filter((r) => r.valor_assinado < 0);
     return {
       count: rows.length,
-      totalEntradas: entradas.reduce((a, r) => a + r.valor, 0),
-      totalSaidas: Math.abs(saidas.reduce((a, r) => a + r.valor, 0)),
+      totalEntradas: entradas.reduce((a, r) => a + r.valor_assinado, 0),
+      totalSaidas: Math.abs(saídas.reduce((a, r) => a + r.valor_assinado, 0)),
     };
   }, [rows]);
   const saldo = stats.totalEntradas - stats.totalSaidas;
 
+  // saldo inicial (antes do período) e final (inicial + saldo do recorte)
+  const saldoInicial = useMemo(() => {
+    if (!from) return 0;
+    const ts = new Date(`${from}T00:00:00`).getTime();
+    return sourceRows
+      .filter((r) => +new Date(r.criado_em) < ts)
+      .reduce((a, r) => a + r.valor_assinado, 0);
+  }, [from, sourceRows]);
+  const saldoFinal = saldoInicial + (rows.reduce((a, r) => a + r.valor_assinado, 0));
+
+  // resumo por forma (do que está filtrado)
+  const resumoPorForma = useMemo(() => {
+    const map = new Map<string, { entradas: number; saidas: number; count: number }>();
+    for (const r of rows) {
+      const key = (r.forma_pagamento || "—").toUpperCase();
+      if (!map.has(key)) map.set(key, { entradas: 0, saidas: 0, count: 0 });
+      const obj = map.get(key)!;
+      obj.count += 1;
+      if (r.valor_assinado >= 0) obj.entradas += r.valor_assinado;
+      else obj.saidas += Math.abs(r.valor_assinado);
+    }
+    // ordena por volume total
+    return Array.from(map.entries()).sort(
+      (a, b) => (b[1].entradas + b[1].saidas) - (a[1].entradas + a[1].saidas)
+    ).slice(0, 8);
+  }, [rows]);
+
   // exporta o que está na tela (filtrado)
   function exportCsv() {
-    const header = ["cliente", "valor", "forma", "data", "observacao"];
+    const header = ["cliente", "direcao", "valor", "forma", "data", "observacao"];
     const lines = rows.map((r) => [
       getClientName(r.cliente_id, r.cliente_nome),
-      String(r.valor).replace(".", ","),
+      r.direcao,
+      String(r.valor_assinado).replace(".", ","), // já assinado (+ / -)
       r.forma_pagamento,
       dtBR(r.criado_em),
       (r.observacao ?? "").replaceAll('"', '""'),
@@ -226,7 +324,7 @@ export default function HistoricoPagamentos() {
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="text-white">
             <h1 className="text-2xl font-semibold tracking-tight">Histórico de pagamentos</h1>
-            <p className="text-slate-300 text-sm">Consulte lançamentos, aplique filtros e exporte o resultado.</p>
+            <p className="text-slate-300 text-sm">Entradas, saídas, filtros e exportação.</p>
           </div>
           <div className="flex items-center gap-2">
             <button onClick={reload}
@@ -246,11 +344,18 @@ export default function HistoricoPagamentos() {
           <StatCardDark title="Saídas" value={money(stats.totalSaidas)} tone="rose" />
           <StatCardDark title="Saldo" value={money(saldo)} tone={saldo >= 0 ? "emerald" : "rose"} />
         </div>
+        {(from || to) && (
+          <div className="mt-3 grid gap-3 sm:grid-cols-3 text-[12px] text-slate-200">
+            <div className="rounded-xl bg-white/5 px-3 py-2">Saldo inicial do período: <b>{money(saldoInicial)}</b></div>
+            <div className="rounded-xl bg-white/5 px-3 py-2">Movimento no período: <b>{money(rows.reduce((a, r) => a + r.valor_assinado, 0))}</b></div>
+            <div className="rounded-xl bg-white/5 px-3 py-2">Saldo final (estimado): <b>{money(saldoFinal)}</b></div>
+          </div>
+        )}
       </div>
 
       {/* Filtros */}
       <div className="rounded-2xl border bg-white p-4 shadow-sm">
-        {/* Cliente + busca */}
+        {/* Linha 1: Cliente + busca */}
         <div className="grid gap-3 md:grid-cols-2">
           <div ref={cliRef}>
             <label className="text-xs font-medium text-slate-600">Cliente</label>
@@ -299,26 +404,46 @@ export default function HistoricoPagamentos() {
           </div>
         </div>
 
-        {/* Datas grandes */}
-        <div className="mt-3 flex flex-wrap items-end gap-3">
-          <div className="min-w-[220px]">
+        {/* Linha 2: Datas, tipo e ordenação */}
+        <div className="mt-3 grid gap-3 md:grid-cols-2 lg:grid-cols-4">
+          <div>
             <label className="text-xs font-medium text-slate-600">De</label>
-            <input type="date" className="mt-1 w-full rounded-xl border px-4 py-3 text-[15px]" value={from} onChange={(e) => onChangeFrom(e.target.value)} />
+            <input type="date" className="mt-1 w-full rounded-xl border px-4 py-2" value={from} onChange={(e) => onChangeFrom(e.target.value)} />
           </div>
-          <div className="min-w-[220px]">
+          <div>
             <label className="text-xs font-medium text-slate-600">Até</label>
-            <input type="date" className="mt-1 w-full rounded-xl border px-4 py-3 text-[15px]" value={to} onChange={(e) => onChangeTo(e.target.value)} />
+            <input type="date" className="mt-1 w-full rounded-xl border px-4 py-2" value={to} onChange={(e) => onChangeTo(e.target.value)} />
           </div>
 
-          <div className="ml-auto flex items-center gap-3">
-            <div className="text-xs text-slate-500">{rows.length} resultado(s)</div>
-            <button onClick={() => applyFilters()} className="rounded-xl bg-blue-600 px-5 py-3 text-white hover:bg-blue-700 disabled:opacity-50" disabled={loading}>
-              {loading ? "Carregando…" : "Filtrar"}
-            </button>
+          <div>
+            <label className="text-xs font-medium text-slate-600">Tipo</label>
+            <div className="mt-1 flex rounded-xl border p-1 text-xs">
+              {(["ALL","ENTRADA","SAIDA"] as const).map((k) => (
+                <button key={k}
+                  className={`flex-1 rounded-lg px-3 py-1 ${tipoFilter===k ? "bg-slate-900 text-white" : "hover:bg-slate-50"}`}
+                  onClick={() => { setTipoFilter(k); applyFilters(sourceRows, { tipo: k }); }}>
+                  {k === "ALL" ? "Todos" : k === "ENTRADA" ? "Entradas" : "Saídas"}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <div>
+            <label className="text-xs font-medium text-slate-600">Ordenar por</label>
+            <select
+              className="mt-1 w-full rounded-xl border px-3 py-2 text-sm"
+              value={sort}
+              onChange={(e) => { const v = e.target.value as typeof sort; setSort(v); applyFilters(sourceRows, { sort: v }); }}
+            >
+              <option value="date_desc">Data (recente → antigo)</option>
+              <option value="date_asc">Data (antigo → recente)</option>
+              <option value="value_desc">Valor (maior → menor)</option>
+              <option value="value_asc">Valor (menor → maior)</option>
+            </select>
           </div>
         </div>
 
-        {/* Chips de período (abaixo das datas) */}
+        {/* Linha 3: Chips de período e botão Filtrar */}
         <div className="mt-3 flex flex-wrap items-center gap-2">
           {[
             { k: "today", label: "Hoje" },
@@ -332,17 +457,41 @@ export default function HistoricoPagamentos() {
               <button key={b.k} onClick={() => quickRange(b.k as any)}
                 className={[
                   "rounded-full px-3 py-1 text-xs transition-colors",
-                  active
-                    ? "border-slate-900 bg-slate-900 text-white shadow-sm"
-                    : "border border-slate-200 bg-white text-slate-700 hover:bg-slate-50",
-                ].join(" ")}
-                title={b.label}>
+                  active ? "border-slate-900 bg-slate-900 text-white shadow-sm"
+                         : "border border-slate-200 bg-white text-slate-700 hover:bg-slate-50",
+                ].join(" ")}>
                 {b.label}
               </button>
             );
           })}
+
+          <div className="ml-auto flex items-center gap-3">
+            <div className="text-xs text-slate-500">{rows.length} resultado(s)</div>
+            <button onClick={() => applyFilters()} className="rounded-xl bg-blue-600 px-5 py-2 text-white hover:bg-blue-700 disabled:opacity-50" disabled={loading}>
+              {loading ? "Carregando…" : "Filtrar"}
+            </button>
+          </div>
         </div>
       </div>
+
+      {/* Resumo por forma */}
+      {rows.length > 0 && (
+        <div className="rounded-2xl border bg-white p-4 shadow-sm">
+          <div className="mb-2 text-sm font-semibold text-slate-700">Resumo por forma (visão atual)</div>
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            {resumoPorForma.map(([forma, v]) => (
+              <div key={forma} className="rounded-xl border p-3">
+                <div className="mb-1 flex items-center justify-between">
+                  <Badge tone={formaTone(forma)}>{forma}</Badge>
+                  <span className="text-[11px] text-slate-500">{v.count} reg.</span>
+                </div>
+                <div className="text-xs text-slate-600">Entradas: <b className="text-emerald-700">{money(v.entradas)}</b></div>
+                <div className="text-xs text-slate-600">Saídas: <b className="text-rose-700">{money(v.saidas)}</b></div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Tabela */}
       <div className="overflow-auto rounded-2xl border bg-white shadow-sm">
@@ -352,6 +501,7 @@ export default function HistoricoPagamentos() {
           <thead className="sticky top-0 bg-slate-50">
             <tr className="text-left">
               <th className="border p-2">Cliente</th>
+              <th className="border p-2">Direção</th>
               <th className="border p-2">Valor</th>
               <th className="border p-2">Forma</th>
               <th className="border p-2">Data</th>
@@ -362,7 +512,7 @@ export default function HistoricoPagamentos() {
             {loading &&
               Array.from({ length: 6 }).map((_, i) => (
                 <tr key={`sk-${i}`} className="animate-pulse">
-                  {Array.from({ length: 5 }).map((__, j) => (
+                  {Array.from({ length: 6 }).map((__, j) => (
                     <td key={j} className="border p-2"><div className="h-4 w-full max-w-[180px] rounded bg-slate-100" /></td>
                   ))}
                 </tr>
@@ -371,7 +521,7 @@ export default function HistoricoPagamentos() {
             {!loading &&
               rows.map((r) => {
                 const nome = getClientName(r.cliente_id, r.cliente_nome);
-                const isEntrada = r.valor >= 0;
+                const isEntrada = r.valor_assinado >= 0;
                 return (
                   <tr key={r.id} className="hover:bg-slate-50">
                     <td className="border p-2">
@@ -382,7 +532,12 @@ export default function HistoricoPagamentos() {
                         <div className="truncate font-medium">{nome || "—"}</div>
                       </div>
                     </td>
-                    <td className={`border p-2 font-semibold whitespace-nowrap ${isEntrada ? "text-emerald-700" : "text-rose-700"}`}>{money(r.valor)}</td>
+                    <td className="border p-2 whitespace-nowrap">
+                      {isEntrada ? <Badge tone="emerald">ENTRADA</Badge> : <Badge tone="rose">SAÍDA</Badge>}
+                    </td>
+                    <td className={`border p-2 font-semibold whitespace-nowrap ${isEntrada ? "text-emerald-700" : "text-rose-700"}`}>
+                      {money(r.valor_assinado)}
+                    </td>
                     <td className="border p-2"><Badge tone={formaTone(r.forma_pagamento)}>{r.forma_pagamento}</Badge></td>
                     <td className="border p-2 whitespace-nowrap">{dtBR(r.criado_em)}</td>
                     <td className="border p-2">
@@ -393,17 +548,17 @@ export default function HistoricoPagamentos() {
               })}
 
             {!loading && rows.length === 0 && (
-              <tr><td colSpan={5} className="p-10 text-center text-slate-500">Nenhum lançamento encontrado.</td></tr>
+              <tr><td colSpan={6} className="p-10 text-center text-slate-500">Nenhum lançamento encontrado.</td></tr>
             )}
           </tbody>
 
           {!loading && rows.length > 0 && (
             <tfoot>
               <tr className="bg-slate-100/60">
-                <td className="border p-2 text-right font-medium">
+                <td className="border p-2 text-right font-medium" colSpan={2}>
                   Totais ({rows.length} {rows.length === 1 ? "lançamento" : "lançamentos"}):
                 </td>
-                <td className="border p-2 font-semibold">{money(rows.reduce((a, r) => a + r.valor, 0))}</td>
+                <td className="border p-2 font-semibold">{money(rows.reduce((a, r) => a + r.valor_assinado, 0))}</td>
                 <td className="border p-2" colSpan={3}></td>
               </tr>
             </tfoot>
@@ -414,7 +569,7 @@ export default function HistoricoPagamentos() {
   );
 }
 
-/* ===== visuais ===== */
+/* ==================== Visuais ==================== */
 function StatCardDark({
   title,
   value,

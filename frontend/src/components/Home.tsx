@@ -17,19 +17,20 @@ type BlocoItem = {
 };
 
 type SaldosBloco = {
-  // nomes possíveis que já vimos no projeto
-  saldo_bloco?: number;         // ENTRADA – SAÍDA (indep. do bom_para)
-  saldo_financeiro?: number;    // imediatos + baixados (ignora bom_para em aberto)
-  a_receber?: number;
-  // fallback (caso backend mude)
+  // possíveis aliases retornados pelo backend
+  saldo_bloco?: number;
   saldo?: number;
-  saldo_imediato?: number;
+  saldo_total?: number;
+  saldoDoBloco?: number;
+  a_receber?: number;
+  aReceber?: number;
+  em_aberto?: number;
+  emAberto?: number;
 };
 
 const currency = (n: number) =>
   Number(n || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
 
-// tenta extrair total do body (total|count) ou do header x-total-count
 function extractTotal(resp: any): number {
   const h = resp?.headers;
   const fromHeader = h?.["x-total-count"] ?? h?.["X-Total-Count"];
@@ -51,9 +52,19 @@ const formatDateTime = (iso?: string) =>
       })
     : undefined;
 
-function safeNumber(v: any) {
+const safeNumber = (v: any) => {
   const n = Number(v);
   return Number.isFinite(n) ? n : 0;
+};
+
+function pickNumber(o: any, ...aliases: string[]) {
+  for (const k of aliases) {
+    if (o && Object.prototype.hasOwnProperty.call(o, k)) {
+      const n = safeNumber(o[k]);
+      if (Number.isFinite(n)) return n;
+    }
+  }
+  return 0;
 }
 
 /** ======================= pequenos componentes ======================= */
@@ -73,6 +84,7 @@ function MetricCard(props: {
   tooltip?: string;
 }) {
   const { title, value, linkTo, linkText = "ver", icon, loading, tooltip, ...a11y } = props;
+
   return (
     <Card aria-busy={loading} className="overflow-hidden">
       <CardHeader className="pb-2">
@@ -81,10 +93,21 @@ function MetricCard(props: {
           <span title={tooltip}>{title}</span>
         </CardTitle>
       </CardHeader>
+
       <CardContent className="flex items-end justify-between pb-5">
-        <div className="min-h-[40px]" {...a11y}>
-          {loading ? <SkeletonBox className="h-8 w-32" /> : value}
+        {/* altura maior + alinhamento pelo baseline para evitar “corte” */}
+        <div className="min-h-[56px] sm:min-h-[64px] flex items-end overflow-visible" {...a11y}>
+          {loading ? (
+            <div className="w-32">
+              <SkeletonBox className="h-8 w-full" />
+            </div>
+          ) : (
+            <div className="font-extrabold leading-none tracking-tight break-words text-[clamp(1.25rem,2.6vw,2rem)]">
+              {value}
+            </div>
+          )}
         </div>
+
         {linkTo && (
           <Link to={linkTo} className="text-blue-600 hover:underline text-sm">
             {linkText}
@@ -110,11 +133,13 @@ function Shortcut({ to, label, icon }: { to: string; label: string; icon: React.
   );
 }
 
-/** ======== micro chart (SVG) – barras do saldo financeiro dos 5 blocos ======== */
+/** ======== Charts ======== */
+
+// Barras verticais (top 5 por exposição)
 function BarsChart({
   data,
   width = 420,
-  height = 120,
+  height = 110,
 }: {
   data: number[];
   width?: number;
@@ -122,29 +147,92 @@ function BarsChart({
 }) {
   if (!data.length) return null;
 
-  // escala
   const maxAbs = Math.max(1, ...data.map((v) => Math.abs(v)));
   const midY = height / 2;
   const barW = Math.max(6, Math.floor((width - 24) / data.length) - 8);
 
   return (
     <svg width={width} height={height} className="block">
-      {/* eixo central */}
       <line x1="0" y1={midY} x2={width} y2={midY} stroke="#e2e8f0" />
       {data.map((v, i) => {
         const x = 12 + i * (barW + 8);
-        const h = (Math.abs(v) / maxAbs) * (height / 2 - 12);
+        const h = (Math.abs(v) / maxAbs) * (height / 2 - 10);
         const isPos = v >= 0;
         const y = isPos ? midY - h : midY;
-        // cores suaves acessíveis
         const fill = isPos ? "#10b981" : "#ef4444";
-        return (
-          <g key={i}>
-            <rect x={x} y={y} width={barW} height={h} rx="3" fill={fill} opacity="0.85" />
-          </g>
-        );
+        return <rect key={i} x={x} y={y} width={barW} height={h} rx="3" fill={fill} opacity="0.9" />;
       })}
     </svg>
+  );
+}
+
+// Donut simples (mostra a composição do total financeiro)
+function DonutChart({
+  a,
+  b,
+  size = 180,
+  labels = ["Débito blocos", "A receber"],
+}: {
+  a: number; // débito positivo
+  b: number; // a receber
+  size?: number;
+  labels?: [string, string] | string[];
+}) {
+  const total = Math.max(0, a) + Math.max(0, b);
+  const r = size / 2;
+  const stroke = 18;
+  const radius = r - stroke / 2;
+  const circumference = 2 * Math.PI * radius;
+  const aLen = total ? (Math.max(0, a) / total) * circumference : 0;
+  const bLen = total ? (Math.max(0, b) / total) * circumference : 0;
+
+  return (
+    <div className="flex flex-col md:flex-row md:items-center gap-4">
+      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
+        <circle cx={r} cy={r} r={radius} stroke="#e2e8f0" strokeWidth={stroke} fill="none" />
+        {/* A (Débito) */}
+        <circle
+          cx={r}
+          cy={r}
+          r={radius}
+          stroke="#ef4444"
+          strokeWidth={stroke}
+          fill="none"
+          strokeDasharray={`${aLen} ${circumference - aLen}`}
+          strokeDashoffset={circumference * 0.25}
+        />
+        {/* B (A receber) */}
+        <circle
+          cx={r}
+          cy={r}
+          r={radius}
+          stroke="#f59e0b"
+          strokeWidth={stroke}
+          fill="none"
+          strokeDasharray={`${bLen} ${circumference - bLen}`}
+          strokeDashoffset={circumference * 0.25 - aLen}
+        />
+        <text x="50%" y="50%" dominantBaseline="central" textAnchor="middle" fontSize="14" fill="#334155">
+          {currency(total)}
+        </text>
+      </svg>
+
+      <div className="space-y-2 text-sm">
+        <div className="flex items-center gap-2">
+          <span className="inline-block h-3 w-3 rounded-sm" style={{ background: "#ef4444" }} />
+          <span className="text-slate-600">{labels[0]}:</span>
+          <strong className="text-slate-800">{currency(a)}</strong>
+        </div>
+        <div className="flex items-center gap-2">
+          <span className="inline-block h-3 w-3 rounded-sm" style={{ background: "#f59e0b" }} />
+          <span className="text-slate-600">{labels[1]}:</span>
+          <strong className="text-slate-800">{currency(b)}</strong>
+        </div>
+        <div className="pt-1 text-xs text-slate-500">
+          Total = {currency(total)} (bate com “Financeiro (abertos)”)
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -155,67 +243,183 @@ export default function Home() {
 
   const [clientesTotal, setClientesTotal] = useState<number>(0);
   const [blocosAbertosTotal, setBlocosAbertosTotal] = useState<number>(0);
-  const [saldoTop5, setSaldoTop5] = useState<number>(0); // saldo financeiro (ignora bom_para aberto)
-  const [aReceberTop5, setAReceberTop5] = useState<number>(0);
+
+  // totais (TODOS os blocos ABERTOS)
+  const [saldoBlocoTotal, setSaldoBlocoTotal] = useState<number>(0);
+  const [debitoBlocoTotal, setDebitoBlocoTotal] = useState<number>(0); // |saldo negativo|
+  const [financeiroTotal, setFinanceiroTotal] = useState<number>(0); // **DEBITO + A_RECEBER**
+  const [aReceberTotal, setAReceberTotal] = useState<number>(0);
+
+  // UI
   const [blocosRecentes, setBlocosRecentes] = useState<BlocoItem[]>([]);
-  const [bars, setBars] = useState<number[]>([]); // para o gráfico
+  const [bars, setBars] = useState<number[]>([]);
 
   const [loading, setLoading] = useState<boolean>(true);
   const [err, setErr] = useState<string | null>(null);
+
+  /** ====== data ====== */
+
+  async function fetchAllBlocosAbertos(limit = 50): Promise<any[]> {
+    let page = 1;
+    let total = 0;
+    const all: any[] = [];
+
+    const first = await api.get("/blocos", {
+      params: { status: "ABERTO", page, limit, sortBy: "aberto_em", sortDir: "DESC" },
+    });
+    total = extractTotal(first);
+    all.push(...(first.data?.data ?? first.data ?? []));
+
+    const pages = Math.ceil(total / limit);
+    while (page < pages) {
+      page += 1;
+      const r = await api.get("/blocos", {
+        params: { status: "ABERTO", page, limit, sortBy: "aberto_em", sortDir: "DESC" },
+        headers: { "x-silent": "1" },
+      });
+      all.push(...(r.data?.data ?? r.data ?? []));
+    }
+
+    const recentes = (all.slice(0, 5) as any[]).map((b) => ({
+      id: b.id,
+      codigo: b.codigo,
+      cliente: b.cliente_nome ?? b.cliente?.nome_fantasia ?? b.cliente ?? "",
+      status: b.status,
+      aberto_em: formatDateTime(b.aberto_em),
+    })) as BlocoItem[];
+    setBlocosRecentes(recentes);
+
+    setBlocosAbertosTotal(total || all.length);
+    return all;
+  }
+
+  type Row = { blocoId: number; saldoBloco: number; aReceber: number; exposicao: number };
+
+  async function fetchFinanceiroRows(blocosAbertos: any[]): Promise<Row[]> {
+    const saldosResp = await Promise.allSettled(
+      blocosAbertos.map((b: any) => api.get(`/blocos/${b.id}/saldos`, { headers: { "x-silent": "1" } }))
+    );
+
+    const rows: Row[] = [];
+
+    saldosResp.forEach((r, i) => {
+      if (r.status !== "fulfilled") return;
+      const raw = (r.value?.data ?? {}) as SaldosBloco;
+
+      const saldoBloco = pickNumber(raw, "saldo_bloco", "saldoDoBloco", "saldo_total", "saldo");
+      const aReceberBloco = pickNumber(raw, "a_receber", "aReceber", "em_aberto", "emAberto");
+
+      // “exposição” por bloco, usada no gráfico Top 5
+      const exposicao = Math.max(0, -saldoBloco) + aReceberBloco;
+
+      rows.push({
+        blocoId: blocosAbertos[i].id,
+        saldoBloco,
+        aReceber: aReceberBloco,
+        exposicao,
+      });
+    });
+
+    return rows;
+  }
+
+  async function fetchAReceberTotal(): Promise<number> {
+    try {
+      const r = await api.get("/financeiro/receber/resumo", {
+        params: { status: "ABERTO,PARCIAL" },
+        headers: { "x-silent": "1" },
+      });
+      const v = pickNumber(r.data, "a_receber", "aReceber", "total", "valor", "valor_total") || 0;
+      if (v > 0) return v;
+    } catch {
+      /* ignore */
+    }
+
+    // fallback por paginação (se não existir /resumo)
+    async function sumFrom(path: string): Promise<number> {
+      const limit = 100;
+      let page = 1;
+      let total = 0;
+      let soma = 0;
+
+      const sumPage = (resp: any) => {
+        const rows = resp?.data?.data ?? resp?.data ?? [];
+        for (const it of rows) {
+          const pronto = pickNumber(it, "em_aberto", "emAberto", "a_receber", "aReceber");
+          if (pronto) {
+            soma += pronto;
+            continue;
+          }
+          const bruto = pickNumber(it, "valor_bruto", "valorBruto", "valor");
+          const baixado = pickNumber(it, "valor_baixado", "valorBaixado", "baixado");
+          soma += Math.max(0, bruto - baixado);
+        }
+      };
+
+      const first = await api.get(path, {
+        params: { page, limit, status: "ABERTO,PARCIAL" },
+        headers: { "x-silent": "1" },
+      });
+      total = extractTotal(first);
+      sumPage(first);
+
+      const pages = Math.ceil(total / limit);
+      while (page < pages) {
+        page += 1;
+        const resp = await api.get(path, {
+          params: { page, limit, status: "ABERTO,PARCIAL" },
+          headers: { "x-silent": "1" },
+        });
+        sumPage(resp);
+      }
+      return soma;
+    }
+
+    try {
+      const v = await sumFrom("/financeiro/receber");
+      if (v > 0) return v;
+    } catch {}
+    try {
+      const v = await sumFrom("/financeiro/titulos");
+      if (v > 0) return v;
+    } catch {}
+
+    return 0;
+  }
 
   const carregarDashboard = useCallback(async () => {
     setLoading(true);
     setErr(null);
     try {
-      // 1) total de clientes (usa paginação para obter o total)
+      // 1) total de clientes
       const respClientes = await api.get("/clientes", { params: { page: 1, limit: 1 } });
       setClientesTotal(extractTotal(respClientes));
 
-      // 2) blocos abertos recentes (limit 5) e total de abertos
-      const respBlocos = await api.get("/blocos", {
-        params: { status: "ABERTO", page: 1, limit: 5, sortBy: "aberto_em", sortDir: "DESC" },
-      });
+      // 2) blocos abertos (todos)
+      const blocosAbertos = await fetchAllBlocosAbertos(50);
 
-      const lista: BlocoItem[] = (respBlocos.data?.data ?? respBlocos.data ?? []).map((b: any) => ({
-        id: b.id,
-        codigo: b.codigo,
-        cliente: b.cliente_nome ?? b.cliente?.nome_fantasia ?? b.cliente ?? "",
-        status: b.status,
-        aberto_em: formatDateTime(b.aberto_em),
-      }));
+      // 3) saldos por bloco + total a receber (global)
+      const [rows, totalARec] = await Promise.all([fetchFinanceiroRows(blocosAbertos), fetchAReceberTotal()]);
+      setAReceberTotal(totalARec);
 
-      setBlocosRecentes(lista);
-      setBlocosAbertosTotal(extractTotal(respBlocos));
+      // totais de blocos
+      const totalSaldoBloco = rows.reduce((sum, r) => sum + r.saldoBloco, 0);
+      const totalDebito = rows.reduce((sum, r) => sum + Math.max(0, -r.saldoBloco), 0);
 
-      // 3) saldos de cada um dos 5 blocos
-      //    usamos saldo_financeiro (imediatos + baixados) como “ignora bom_para em aberto”
-      const saldosResp = await Promise.allSettled(
-        lista.map((b) => api.get(`/blocos/${b.id}/saldos`, { headers: { "x-silent": "1" } }))
-      );
+      setSaldoBlocoTotal(totalSaldoBloco);
+      setDebitoBlocoTotal(totalDebito);
 
-      const financiarios: number[] = [];
-      const receberArr: number[] = [];
+      // *** REGRA SOLICITADA ***
+      // Financeiro (abertos) = Débito dos blocos (positivo) + A receber (abertos)
+      setFinanceiroTotal(totalDebito + totalARec);
 
-      saldosResp.forEach((r) => {
-        if (r.status !== "fulfilled") {
-          financiarios.push(0);
-          receberArr.push(0);
-          return;
-        }
-        const raw = (r.value?.data ?? {}) as SaldosBloco;
-        const fin =
-          safeNumber(raw.saldo_financeiro) ||
-          safeNumber(raw.saldo_imediato) ||
-          // fallback (se algum back antigo mandar “saldo” como financeiro)
-          (raw.saldo !== undefined && safeNumber(raw.saldo)) ||
-          0;
-        financiarios.push(fin);
-        receberArr.push(safeNumber(raw.a_receber));
-      });
-
-      setBars(financiarios);
-      setSaldoTop5(financiarios.reduce((acc, n) => acc + n, 0));
-      setAReceberTop5(receberArr.reduce((acc, n) => acc + n, 0));
+      // Top 5 por exposição (usa cálculo por bloco)
+      const top5 = rows
+        .slice()
+        .sort((a, b) => Math.abs(b.exposicao) - Math.abs(a.exposicao))
+        .slice(0, 5)
+        .map((r) => r.exposicao);
+      setBars(top5);
     } catch (e: any) {
       console.error("Erro no dashboard:", e);
       const msg = e?.response?.data?.message || e?.message || "Falha ao carregar o dashboard.";
@@ -230,16 +434,21 @@ export default function Home() {
   }, [carregarDashboard]);
 
   const resumo = useMemo(
-    () => ({ clientes: clientesTotal, blocosAbertos: blocosAbertosTotal, saldoTop5, aReceberTop5 }),
-    [clientesTotal, blocosAbertosTotal, saldoTop5, aReceberTop5]
+    () => ({
+      clientes: clientesTotal,
+      blocosAbertos: blocosAbertosTotal,
+      saldoBlocoTotal,
+      financeiroTotal,
+      aReceberTotal,
+      debitoBlocoTotal,
+    }),
+    [clientesTotal, blocosAbertosTotal, saldoBlocoTotal, financeiroTotal, aReceberTotal, debitoBlocoTotal]
   );
-
-  const saldoClass = resumo.saldoTop5 >= 0 ? "text-emerald-600" : "text-rose-600";
 
   return (
     <div className="space-y-8">
       {/* hero */}
-      <section className="rounded-3xl bg-gradient-to-r from-slate-900 via-slate-800 to-slate-700 text-white px-8 py-7 shadow-md">
+      <section className="rounded-3xl bg-gradient-to-r from-slate-900 via-slate-800 to-slate-700 text-white px-6 py-6 shadow-md">
         <div className="flex flex-col gap-6 md:flex-row md:items-end md:justify-between">
           <div>
             <h2 className="text-2xl font-semibold tracking-tight">Bem-vindo</h2>
@@ -253,10 +462,7 @@ export default function Home() {
             >
               Abrir blocos
             </Button>
-            <Button
-              className="bg-blue-600 hover:bg-blue-700"
-              onClick={() => navigate("/financeiro/receber")}
-            >
+            <Button className="bg-blue-600 hover:bg-blue-700" onClick={() => navigate("/financeiro/receber")}>
               Ir ao Financeiro
             </Button>
           </div>
@@ -274,12 +480,12 @@ export default function Home() {
       )}
 
       {/* métricas */}
-      <section className="grid grid-cols-1 gap-6 xl:grid-cols-4 md:grid-cols-2">
+      <section className="grid gap-5 [grid-template-columns:repeat(auto-fit,minmax(220px,1fr))]">
         <MetricCard
           title="Clientes"
           icon="👥"
           loading={loading}
-          value={<p className="text-4xl font-bold">{resumo.clientes}</p>}
+          value={<p className="text-3xl md:text-4xl font-bold whitespace-nowrap">{resumo.clientes}</p>}
           linkTo="/clientes"
           linkText="Ver clientes"
           aria-live="polite"
@@ -289,47 +495,64 @@ export default function Home() {
           title="Blocos abertos"
           icon="🧩"
           loading={loading}
-          value={<p className="text-4xl font-bold">{resumo.blocosAbertos}</p>}
+          value={<p className="text-3xl md:text-4xl font-bold whitespace-nowrap">{resumo.blocosAbertos}</p>}
           linkTo="/blocos"
           linkText="Ver blocos"
           aria-live="polite"
         />
 
         <MetricCard
-          title="Saldo imediato (top 5 blocos)"
-          icon="💰"
+          title="Saldo do bloco (abertos)"
+          icon="📊"
           loading={loading}
-          tooltip="Somatório do saldo FINANCEIRO dos 5 blocos mais recentes (imediatos + baixados — ignora lançamentos com 'bom_para')."
           value={
-            <div>
-              <p className={`text-4xl font-extrabold ${saldoClass}`}>{currency(resumo.saldoTop5)}</p>
-              <p className="mt-1 text-xs text-slate-500">Imediatos + baixados (sem 'bom_para')</p>
-            </div>
+            <span className={saldoBlocoTotal < 0 ? "text-rose-600" : "text-emerald-600"}>
+              {currency(saldoBlocoTotal)}
+            </span>
           }
-          aria-live="polite"
         />
 
         <MetricCard
-          title="A receber (top 5 blocos)"
+          title="Financeiro (abertos)"
+          icon="💰"
+          loading={loading}
+          tooltip="Débito dos blocos (|saldo negativo|) + A receber (abertos)."
+          value={<span className="text-emerald-600">{currency(resumo.financeiroTotal)}</span>}
+        />
+
+        <MetricCard
+          title="A receber (abertos)"
           icon="📥"
           loading={loading}
-          tooltip="Total em títulos ABERTOS/PARCIAIS dos 5 blocos mais recentes."
-          value={<p className="text-4xl font-bold text-amber-700">{currency(resumo.aReceberTop5)}</p>}
-          linkTo="/financeiro/receber"
-          linkText="Ver financeiro"
-          aria-live="polite"
+          value={<span className="text-amber-700">{currency(resumo.aReceberTotal)}</span>}
         />
       </section>
 
-      {/* gráfico rápido */}
+      {/* Composição do financeiro (deve bater com o card) */}
       <section>
         <Card>
           <CardHeader className="pb-2">
-            <CardTitle className="text-slate-600">Saldo financeiro dos 5 blocos recentes</CardTitle>
+            <CardTitle className="text-slate-600">Composição do financeiro (abertos)</CardTitle>
+          </CardHeader>
+          <CardContent className="pt-2">
+            {loading ? (
+              <SkeletonBox className="h-44 w-full" />
+            ) : (
+              <DonutChart a={resumo.debitoBlocoTotal} b={resumo.aReceberTotal} />
+            )}
+          </CardContent>
+        </Card>
+      </section>
+
+      {/* gráfico rápido – Top 5 blocos por exposição */}
+      <section>
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-slate-600">Top 5 blocos por exposição (financeiro)</CardTitle>
           </CardHeader>
           <CardContent className="pt-1">
             {loading ? (
-              <SkeletonBox className="h-32 w-full" />
+              <SkeletonBox className="h-28 w-full" />
             ) : bars.length ? (
               <div className="overflow-x-auto">
                 <BarsChart data={bars} />
@@ -349,7 +572,7 @@ export default function Home() {
         </Card>
       </section>
 
-      {/* atalhos essenciais */}
+      {/* atalhos */}
       <section>
         <Card>
           <CardHeader>

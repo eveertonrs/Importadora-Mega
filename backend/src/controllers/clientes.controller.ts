@@ -74,86 +74,94 @@ export const getClientes = async (req: Request, res: Response) => {
   }
 };
 
-/* ============= Helper de saldos (mesma lógica do Bloco) ============= */
+/* ============= Helper de saldos (AGORA consolidado por cliente) ============= */
+/**
+ * Definições:
+ * - saldo_bloco (cliente): soma SAÍDA(+) / ENTRADA(−) de TODOS os blocos ABERTOS do cliente.
+ * - financeiro (cliente): IMEDIATOS (bom_para IS NULL) dos blocos ABERTOS + TODOS os títulos BAIXADOS do cliente (qualquer bloco).
+ * - a_receber (cliente): TODOS os títulos em ABERTO/PARCIAL do cliente (qualquer bloco).
+ */
+/* ============= Helper de saldos (ajustado) ============= */
 async function calcularSaldosCliente(clienteId: number) {
-  // 1) Saldo do bloco: todas as movimentações (ignora CANCELADO), SAÍDA + / ENTRADA −
+  // 1) Saldo do(s) bloco(s) ABERTO(s): SAÍDA + / ENTRADA −
   const sb = await pool
     .request()
     .input("id", sql.Int, clienteId)
-    .query(
-      `;WITH open_bloco AS (
+    .query(`
+      ;WITH open_bloco AS (
         SELECT id FROM dbo.blocos WHERE cliente_id = @id AND status = 'ABERTO'
       )
-      SELECT
-        COALESCE(SUM(
-          CASE
-            WHEN l.status = 'CANCELADO' THEN 0
-            WHEN l.sentido = 'SAIDA'    THEN l.valor
-            WHEN l.sentido = 'ENTRADA'  THEN -l.valor
-            ELSE 0
-          END
-        ), 0) AS saldo_bloco
+      SELECT COALESCE(SUM(
+        CASE
+          WHEN l.status = 'CANCELADO' THEN 0
+          WHEN l.sentido = 'SAIDA'    THEN l.valor
+          WHEN l.sentido = 'ENTRADA'  THEN -l.valor
+          ELSE 0
+        END
+      ),0) AS saldo_bloco
       FROM open_bloco b
-      LEFT JOIN dbo.bloco_lancamentos l ON l.bloco_id = b.id`
-    );
+      LEFT JOIN dbo.bloco_lancamentos l ON l.bloco_id = b.id
+    `);
 
   const saldo_bloco = Number(sb.recordset[0]?.saldo_bloco ?? 0);
 
-  // 2) Financeiro = imediatos (bom_para IS NULL) com o mesmo sinal + títulos BAIXADOS
+  // 2) Financeiro = (imediatos do(s) bloco(s) ABERTO(s), exceto "SALDO ANTERIOR") + (baixas do(s) bloco(s) ABERTO(s))
   const fi = await pool
     .request()
     .input("id", sql.Int, clienteId)
-    .query(
-      `;WITH open_bloco AS (
+    .query(`
+      ;WITH open_bloco AS (
         SELECT id FROM dbo.blocos WHERE cliente_id = @id AND status = 'ABERTO'
       )
       SELECT
+        -- imediatos (bom_para IS NULL), EXCLUINDO "SALDO ANTERIOR" (nome ou ref ANT-*)
         COALESCE((
-          SELECT SUM(
-            CASE
-              WHEN l.status='CANCELADO' THEN 0
-              WHEN l.bom_para IS NULL AND l.sentido='SAIDA'   THEN l.valor
-              WHEN l.bom_para IS NULL AND l.sentido='ENTRADA' THEN -l.valor
-              ELSE 0
-            END
-          )
+          SELECT SUM(CASE
+            WHEN l.status='CANCELADO' THEN 0
+            WHEN l.bom_para IS NULL AND l.sentido='SAIDA'   THEN l.valor
+            WHEN l.bom_para IS NULL AND l.sentido='ENTRADA' THEN -l.valor
+            ELSE 0
+          END)
           FROM open_bloco b
-          LEFT JOIN dbo.bloco_lancamentos l ON l.bloco_id = b.id
+          JOIN dbo.bloco_lancamentos l ON l.bloco_id = b.id
+          WHERE l.bom_para IS NULL
+            AND UPPER(LTRIM(RTRIM(l.tipo_recebimento))) <> 'SALDO ANTERIOR'
+            AND (l.numero_referencia IS NULL OR l.numero_referencia NOT LIKE 'ANT-%')
         ),0) AS imediatos,
+        -- títulos baixados do(s) bloco(s) ABERTO(s)
         COALESCE((
           SELECT SUM(t.valor_baixado)
           FROM open_bloco b
           JOIN dbo.financeiro_titulos t ON t.bloco_id = b.id
           WHERE t.status = 'BAIXADO'
-        ),0) AS tit_baixados`
-    );
+        ),0) AS tit_baixados
+    `);
 
-  const financeiro =
-    Number(fi.recordset[0]?.imediatos ?? 0) + Number(fi.recordset[0]?.tit_baixados ?? 0);
+  const financeiro = Number(fi.recordset[0]?.imediatos ?? 0) + Number(fi.recordset[0]?.tit_baixados ?? 0);
 
-  // 3) A receber = títulos ABERTO/PARCIAL do bloco aberto
+  // 3) A receber = títulos ABERTOS/PARCIAIS de TODOS os blocos do cliente
   const ar = await pool
     .request()
     .input("id", sql.Int, clienteId)
-    .query(
-      `;WITH open_bloco AS (
-        SELECT id FROM dbo.blocos WHERE cliente_id = @id AND status = 'ABERTO'
-      )
+    .query(`
       SELECT COALESCE(SUM(t.valor_bruto - t.valor_baixado), 0) AS a_receber
-      FROM open_bloco b
-      JOIN dbo.financeiro_titulos t ON t.bloco_id = b.id
-      WHERE t.status IN ('ABERTO','PARCIAL')`
-    );
+      FROM dbo.financeiro_titulos t
+      JOIN dbo.blocos b ON b.id = t.bloco_id
+      WHERE b.cliente_id = @id
+        AND t.status IN ('ABERTO','PARCIAL')
+    `);
 
   const a_receber = Number(ar.recordset[0]?.a_receber ?? 0);
 
   return {
-    saldo_bloco,
-    financeiro,
-    a_receber,
-    saldo: saldo_bloco + financeiro, // total (compatibilidade)
+    saldo_bloco,           // viaja entre blocos (ABERTO)
+    financeiro,            // só o que “bate no caixa” do bloco ABERTO (sem SALDO ANTERIOR)
+    a_receber,             // tudo que ainda vai entrar (qualquer bloco do cliente)
+    saldo: saldo_bloco + financeiro, // compatibilidade
   };
 }
+
+
 
 /* ========================= GET by ID ========================= */
 

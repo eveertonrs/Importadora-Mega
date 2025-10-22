@@ -140,7 +140,7 @@ export default function BlocoDetalhe() {
     });
     setLancs(r?.data ?? []);
 
-    // atualiza os cartões
+    // atualiza o saldo do bloco (financeiro e a receber NÃO aparecem mais aqui)
     try {
       const s = await getSaldos(blocoId);
       setSaldos(s);
@@ -241,7 +241,8 @@ export default function BlocoDetalhe() {
 
   async function doFechar() {
     if (!podeFechar) return;
-    const s = saldos?.saldo_imediato ?? 0;
+    // confirmação usa apenas o SALDO DO BLOCO (o que “viaja”)
+    const s = saldos?.saldo_bloco ?? 0;
     if (s > 0) {
       const ok = confirm(
         `Fechar com saldo POSITIVO de ${s.toLocaleString("pt-BR", {
@@ -330,8 +331,8 @@ export default function BlocoDetalhe() {
         ))}
       </div>
 
-      {/* Saldos */}
-      <div className="grid lg:grid-cols-3 gap-3">
+      {/* Saldos do BLOCO — agora apenas o saldo do bloco */}
+      <div className="grid lg:grid-cols-1 gap-3">
         <div className={`rounded-2xl border bg-gradient-to-r ${tone(saldos?.saldo_bloco ?? 0)} p-4`}>
           <div className="text-xs/5 opacity-80">Saldo do bloco</div>
           <div className="text-2xl font-semibold">
@@ -340,22 +341,6 @@ export default function BlocoDetalhe() {
           <div className="text-[11px] opacity-80 mt-1">
             Soma de todas as movimentações (ENTRADA − / SAÍDA +), independente de “bom para”.
           </div>
-        </div>
-
-        <div className={`rounded-2xl border bg-gradient-to-r ${tone(saldos?.saldo_financeiro ?? 0)} p-4`}>
-          <div className="text-xs/5 opacity-80">Financeiro</div>
-          <div className="text-2xl font-semibold">
-            {(saldos?.saldo_financeiro ?? 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}
-          </div>
-          <div className="text-[11px] opacity-80 mt-1">Lançamentos imediatos + títulos baixados do bloco.</div>
-        </div>
-
-        <div className="rounded-2xl border bg-gradient-to-r from-amber-200 to-yellow-200 text-amber-900 ring-1 ring-amber-300 p-4">
-          <div className="text-xs/5 opacity-80">A receber</div>
-          <div className="text-2xl font-semibold">
-            {(saldos?.a_receber ?? 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}
-          </div>
-          <div className="text-[11px] opacity-80 mt-1">Títulos em ABERTO/PARCIAL do bloco.</div>
         </div>
       </div>
 

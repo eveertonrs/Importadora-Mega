@@ -148,15 +148,19 @@ export const createBloco = async (req: Request, res: Response) => {
       if (lastClosed.recordset.length) {
         const blocoFechadoId = Number(lastClosed.recordset[0].id);
 
-        // saldo imediato do bloco fechado (ignora bom_para)
+        // SALDO DO BLOCO (ignora CANCELADO) → SAÍDA + / ENTRADA −
         const saldoRS = await tx
           .request()
           .input("bid", sql.Int, blocoFechadoId)
           .query(
             `SELECT
-               COALESCE(SUM(CASE WHEN sentido='SAIDA'   AND bom_para IS NULL THEN valor ELSE 0 END),0)
-             - COALESCE(SUM(CASE WHEN sentido='ENTRADA' AND bom_para IS NULL THEN valor ELSE 0 END),0) AS saldo
-             FROM bloco_lancamentos
+               COALESCE(SUM(CASE
+                 WHEN status = 'CANCELADO' THEN 0
+                 WHEN sentido = 'SAIDA'    THEN  valor
+                 WHEN sentido = 'ENTRADA'  THEN -valor
+                 ELSE 0
+               END), 0) AS saldo
+             FROM dbo.bloco_lancamentos
              WHERE bloco_id = @bid`
           );
 
@@ -406,7 +410,7 @@ export const addLancamentoToBloco = async (req: AuthenticatedRequest, res: Respo
   }
 };
 
-/** Saldo legado (mantido) */
+/** Saldo legado (mantido, agora ignorando CANCELADO) */
 export const getBlocoSaldo = async (req: Request, res: Response) => {
   const { id } = req.params;
   try {
@@ -416,9 +420,13 @@ export const getBlocoSaldo = async (req: Request, res: Response) => {
       .query(
         `SELECT
            @bloco_id AS bloco_id,
-           COALESCE(SUM(CASE WHEN sentido = 'SAIDA'   THEN valor ELSE 0 END), 0)
-         - COALESCE(SUM(CASE WHEN sentido = 'ENTRADA' THEN valor ELSE 0 END), 0) AS saldo
-         FROM bloco_lancamentos
+           COALESCE(SUM(CASE
+             WHEN status='CANCELADO' THEN 0
+             WHEN sentido='SAIDA'    THEN  valor
+             WHEN sentido='ENTRADA'  THEN -valor
+             ELSE 0
+           END),0) AS saldo
+         FROM dbo.bloco_lancamentos
          WHERE bloco_id = @bloco_id`
       );
 
@@ -437,9 +445,9 @@ export const getBlocoSaldo = async (req: Request, res: Response) => {
 };
 
 /**
- * Saldos novos:
- * - saldo_bloco      = TODAS as movimentações (inclui bom_para) → SAÍDA - ENTRADA
- * - saldo_imediato   = SOMENTE movimentações imediatas (bom_para IS NULL)
+ * Saldos:
+ * - saldo_bloco      = TODAS as movimentações (inclui bom_para) → SAÍDA - ENTRADA (ignorando CANCELADO)
+ * - saldo_imediato   = SOMENTE movimentações imediatas (bom_para IS NULL, ignorando CANCELADO)
  * - a_receber        = Σ (valor_bruto - valor_baixado) dos títulos ABERTO/PARCIAL do bloco
  * - saldo_financeiro = saldo_imediato + Σ valor_baixado de títulos do bloco
  */
@@ -459,9 +467,13 @@ export const getBlocoSaldos = async (req: Request, res: Response) => {
       .input("bloco_id", sql.Int, +id)
       .query(
         `SELECT
-           COALESCE(SUM(CASE WHEN sentido='SAIDA'   THEN valor ELSE 0 END),0)
-         - COALESCE(SUM(CASE WHEN sentido='ENTRADA' THEN valor ELSE 0 END),0) AS saldo_bloco
-         FROM bloco_lancamentos
+           COALESCE(SUM(CASE
+             WHEN status='CANCELADO' THEN 0
+             WHEN sentido='SAIDA'    THEN  valor
+             WHEN sentido='ENTRADA'  THEN -valor
+             ELSE 0
+           END),0) AS saldo_bloco
+         FROM dbo.bloco_lancamentos
          WHERE bloco_id = @bloco_id`
       );
     const saldo_bloco = Number(saldoBlocoRS.recordset[0]?.saldo_bloco ?? 0);
@@ -472,9 +484,13 @@ export const getBlocoSaldos = async (req: Request, res: Response) => {
       .input("bloco_id", sql.Int, +id)
       .query(
         `SELECT
-           COALESCE(SUM(CASE WHEN sentido='SAIDA'   AND bom_para IS NULL THEN valor ELSE 0 END),0)
-         - COALESCE(SUM(CASE WHEN sentido='ENTRADA' AND bom_para IS NULL THEN valor ELSE 0 END),0) AS saldo_imediato
-         FROM bloco_lancamentos
+           COALESCE(SUM(CASE
+             WHEN status='CANCELADO' THEN 0
+             WHEN bom_para IS NULL AND sentido='SAIDA'   THEN  valor
+             WHEN bom_para IS NULL AND sentido='ENTRADA' THEN -valor
+             ELSE 0
+           END),0) AS saldo_imediato
+         FROM dbo.bloco_lancamentos
          WHERE bloco_id = @bloco_id`
       );
     const saldo_imediato = Number(saldoImediatoRS.recordset[0]?.saldo_imediato ?? 0);
@@ -515,22 +531,10 @@ export const getBlocoSaldos = async (req: Request, res: Response) => {
 export const fecharBloco = async (req: Request, res: Response) => {
   const { id } = req.params;
   try {
-    // saldo imediato no fechamento (informativo)
-    const saldoRS = await pool
-      .request()
-      .input("bloco_id", sql.Int, +id)
-      .query(
-        `SELECT b.id, b.cliente_id,
-          (
-            COALESCE((SELECT SUM(valor) FROM bloco_lancamentos WHERE bloco_id = b.id AND sentido = 'SAIDA'   AND bom_para IS NULL), 0)
-            -
-            COALESCE((SELECT SUM(valor) FROM bloco_lancamentos WHERE bloco_id = b.id AND sentido = 'ENTRADA' AND bom_para IS NULL), 0)
-          ) AS saldo
-        FROM blocos b
-        WHERE b.id = @bloco_id`
-      );
-
-    if (!saldoRS.recordset.length) return res.status(404).json({ message: "Bloco não encontrado" });
+    // existência
+    const bx = await pool.request().input("bloco_id", sql.Int, +id)
+      .query(`SELECT TOP 1 id, cliente_id, status FROM dbo.blocos WHERE id = @bloco_id`);
+    if (!bx.recordset.length) return res.status(404).json({ message: "Bloco não encontrado" });
 
     const result = await pool
       .request()
@@ -546,7 +550,42 @@ export const fecharBloco = async (req: Request, res: Response) => {
       return res.status(404).json({ message: "Bloco não encontrado ou já está fechado" });
     }
 
-    res.json({ ...result.recordset[0] });
+    // recalcula saldos no momento do fechamento (CANCELADO ignorado)
+    const [sb, si, ar, tb] = await Promise.all([
+      pool.request().input("bloco_id", sql.Int, +id).query(`
+        SELECT COALESCE(SUM(CASE
+          WHEN status='CANCELADO' THEN 0
+          WHEN sentido='SAIDA'    THEN  valor
+          WHEN sentido='ENTRADA'  THEN -valor
+          ELSE 0 END),0) AS v
+        FROM dbo.bloco_lancamentos WHERE bloco_id=@bloco_id`),
+      pool.request().input("bloco_id", sql.Int, +id).query(`
+        SELECT COALESCE(SUM(CASE
+          WHEN status='CANCELADO' THEN 0
+          WHEN bom_para IS NULL AND sentido='SAIDA'   THEN  valor
+          WHEN bom_para IS NULL AND sentido='ENTRADA' THEN -valor
+          ELSE 0 END),0) AS v
+        FROM dbo.bloco_lancamentos WHERE bloco_id=@bloco_id`),
+      pool.request().input("bloco_id", sql.Int, +id).query(`
+        SELECT COALESCE(SUM(valor_bruto - valor_baixado),0) AS v
+        FROM dbo.financeiro_titulos
+        WHERE bloco_id=@bloco_id AND status IN ('ABERTO','PARCIAL')`),
+      pool.request().input("bloco_id", sql.Int, +id).query(`
+        SELECT COALESCE(SUM(valor_baixado),0) AS v
+        FROM dbo.financeiro_titulos
+        WHERE bloco_id=@bloco_id AND valor_baixado>0`)
+    ]);
+
+    const saldo_bloco      = Number(sb.recordset[0]?.v ?? 0);
+    const saldo_imediato   = Number(si.recordset[0]?.v ?? 0);
+    const a_receber        = Number(ar.recordset[0]?.v ?? 0);
+    const total_baixado    = Number(tb.recordset[0]?.v ?? 0);
+    const saldo_financeiro = saldo_imediato + total_baixado;
+
+    res.json({
+      ...result.recordset[0],
+      saldos: { saldo_bloco, saldo_imediato, a_receber, total_baixado, saldo_financeiro },
+    });
   } catch (error) {
     console.error("Erro ao fechar bloco:", error);
     res.status(500).json({ message: "Erro interno no servidor" });
