@@ -27,6 +27,80 @@ function toISODateOnly(s?: string | null): string | null {
   return `${yyyy}-${mm}-${dd}`;
 }
 
+type TituloRow = {
+  id: number;
+  cliente_id: number;
+  bloco_id: number | null;
+  bloco_lanc_id: number | null;
+  tipo: string | null;
+  bom_para: Date | null;
+  valor_bruto: number;
+  valor_baixado: number;
+  status: string;
+};
+
+/** Busca título com fallback para schema antigo (sem bloco_lanc_id) */
+async function fetchTituloById(tituloId: number): Promise<TituloRow> {
+  try {
+    const r = await pool
+      .request()
+      .input("id", sql.Int, tituloId)
+      .query(`
+        SELECT id, cliente_id, bloco_id, bloco_lanc_id, tipo, bom_para, valor_bruto, valor_baixado, status
+        FROM dbo.financeiro_titulos
+        WHERE id = @id
+      `);
+    if (!r.recordset.length) throw new Error("Título não encontrado");
+    return r.recordset[0] as TituloRow;
+  } catch (e: any) {
+    const num = e?.number ?? e?.originalError?.number;
+    const msg = String(e?.message || "");
+    if (num !== 207 && !/Invalid column name 'bloco_lanc_id'/i.test(msg)) throw e;
+    const r2 = await pool
+      .request()
+      .input("id", sql.Int, tituloId)
+      .query(`
+        SELECT id, cliente_id, bloco_id,
+               CAST(NULL AS int) AS bloco_lanc_id,
+               tipo, bom_para, valor_bruto, valor_baixado, status
+        FROM dbo.financeiro_titulos
+        WHERE id = @id
+      `);
+    if (!r2.recordset.length) throw new Error("Título não encontrado");
+    return r2.recordset[0] as TituloRow;
+  }
+}
+
+/** Resolve o id do lançamento no bloco para atualizar status */
+async function resolveLancId(
+  tx: sql.Transaction,
+  titulo: TituloRow
+): Promise<number | null> {
+  if (!titulo.bloco_id) return null;
+  if (titulo.bloco_lanc_id) return titulo.bloco_lanc_id;
+
+  const r = await new sql.Request(tx)
+    .input("bloco_id", sql.Int, titulo.bloco_id)
+    .input("tipo", sql.VarChar(30), String(titulo.tipo || "").toUpperCase())
+    .input("valor", sql.Decimal(18, 2), Number(titulo.valor_bruto || 0))
+    .input("bom_para", sql.Date, titulo.bom_para ? new Date(titulo.bom_para) : null)
+    .query(`
+      SELECT TOP 1 id
+      FROM dbo.bloco_lancamentos
+      WHERE bloco_id = @bloco_id
+        AND sentido = 'SAIDA'
+        AND UPPER(tipo_recebimento) = @tipo
+        AND ABS(valor - @valor) < 0.01
+        AND (
+              (@bom_para IS NULL AND bom_para IS NULL)
+           OR ( @bom_para IS NOT NULL AND bom_para IS NOT NULL AND CAST(bom_para AS date) = CAST(@bom_para AS date) )
+        )
+      ORDER BY id DESC
+    `);
+
+  return r.recordset.length ? Number(r.recordset[0].id) : null;
+}
+
 /* ======================================================================
    1) REGISTRAR BAIXA DE TÍTULO
    ====================================================================== */
@@ -34,29 +108,16 @@ function toISODateOnly(s?: string | null): string | null {
 const baixaSchema = z.object({
   valor: z.coerce.number().positive().optional(),
   valor_baixa: z.coerce.number().positive().optional(),
-
   data_baixa: z.string().optional(),
   forma: z.string().optional(),
   forma_pagto: z.string().optional(),
-
   observacao: z.string().optional(),
   obs: z.string().optional(),
 });
 
-// troque a assinatura para ter o usuário
 export const registrarBaixaTitulo = async (req: AuthenticatedRequest, res: Response) => {
   const tituloId = Number(req.params.id);
   if (!Number.isFinite(tituloId)) return res.status(400).json({ message: "ID inválido" });
-
-  const baixaSchema = z.object({
-    valor: z.coerce.number().positive().optional(),
-    valor_baixa: z.coerce.number().positive().optional(),
-    data_baixa: z.string().optional(),
-    forma: z.string().optional(),
-    forma_pagto: z.string().optional(),
-    observacao: z.string().optional(),
-    obs: z.string().optional(),
-  });
 
   try {
     const raw = baixaSchema.parse(req.body);
@@ -67,38 +128,7 @@ export const registrarBaixaTitulo = async (req: AuthenticatedRequest, res: Respo
     const observacao = raw.obs ?? raw.observacao ?? undefined;
     const userId = req.user?.id ?? null;
 
-    type TituloRow = {
-      id: number; cliente_id: number; bloco_id: number | null;
-      bloco_lanc_id: number | null; tipo: string | null; bom_para: Date | null;
-      valor_bruto: number; valor_baixado: number; status: string;
-    };
-
-    async function fetchTitulo(): Promise<TituloRow> {
-      try {
-        const r = await pool.request().input("id", sql.Int, tituloId).query(`
-          SELECT id, cliente_id, bloco_id, bloco_lanc_id, tipo, bom_para, valor_bruto, valor_baixado, status
-          FROM financeiro_titulos
-          WHERE id = @id
-        `);
-        if (!r.recordset.length) throw new Error("Título não encontrado");
-        return r.recordset[0] as TituloRow;
-      } catch (e: any) {
-        const num = e?.number ?? e?.originalError?.number;
-        const msg = String(e?.message || "");
-        if (num !== 207 && !/Invalid column name 'bloco_lanc_id'/i.test(msg)) throw e;
-        const r2 = await pool.request().input("id", sql.Int, tituloId).query(`
-          SELECT id, cliente_id, bloco_id,
-                 CAST(NULL AS int) AS bloco_lanc_id,
-                 tipo, bom_para, valor_bruto, valor_baixado, status
-          FROM financeiro_titulos
-          WHERE id = @id
-        `);
-        if (!r2.recordset.length) throw new Error("Título não encontrado");
-        return r2.recordset[0] as TituloRow;
-      }
-    }
-
-    const titulo = await fetchTitulo();
+    const titulo = await fetchTituloById(tituloId);
 
     const novoBaixado = Number(titulo.valor_baixado ?? 0) + valor;
     const statusNovo = novoBaixado >= Number(titulo.valor_bruto ?? 0) ? "BAIXADO" : "PARCIAL";
@@ -112,66 +142,37 @@ export const registrarBaixaTitulo = async (req: AuthenticatedRequest, res: Respo
         .input("valor_baixado", sql.Decimal(18, 2), novoBaixado)
         .input("status", sql.VarChar(20), statusNovo)
         .query(`
-          UPDATE financeiro_titulos
-          SET valor_baixado = @valor_baixado,
-              status = @status
-          WHERE id = @id
+          UPDATE dbo.financeiro_titulos
+             SET valor_baixado = @valor_baixado,
+                 status = @status
+           WHERE id = @id
         `);
 
-      // 2) Marcar a linha ORIGINAL do bloco como "BAIXADO NO FINANCEIRO"
+      // 2) Se virou BAIXADO, marca o lançamento do bloco
       if (statusNovo === "BAIXADO" && titulo.bloco_id) {
-        let lancIdToUpdate: number | null = titulo.bloco_lanc_id ?? null;
-
-        if (!lancIdToUpdate) {
-          // localizar por tipo + valor + bom_para (fallback schema antigo)
-          const r = await new sql.Request(tx)
-            .input("bloco_id", sql.Int, titulo.bloco_id)
-            .input("tipo", sql.VarChar(30), String(titulo.tipo || "").toUpperCase())
-            .input("valor", sql.Decimal(18, 2), Number(titulo.valor_bruto || 0))
-            .input("bom_para", sql.Date, titulo.bom_para ? new Date(titulo.bom_para) : null)
-            .query(`
-              SELECT TOP 1 id
-              FROM dbo.bloco_lancamentos
-              WHERE bloco_id = @bloco_id
-                AND sentido = 'SAIDA'
-                AND UPPER(tipo_recebimento) = @tipo
-                AND ABS(valor - @valor) < 0.01
-                AND (
-                      (@bom_para IS NULL AND bom_para IS NULL)
-                   OR ( @bom_para IS NOT NULL AND bom_para IS NOT NULL AND CAST(bom_para AS date) = CAST(@bom_para AS date) )
-                )
-              ORDER BY id DESC
-            `);
-          if (r.recordset.length) lancIdToUpdate = Number(r.recordset[0].id);
-        }
-
+        const lancIdToUpdate = await resolveLancId(tx, titulo);
         if (lancIdToUpdate) {
-          const reqUpd = new sql.Request(tx)
-            .input("id", sql.Int, lancIdToUpdate)
-            .input("obsExtra", sql.VarChar(sql.MAX), (observacao ? ` • ${observacao}` : ""))
-            .input("userId", sql.Int, userId);
-
-          // tenta com atualizado_em; se der 207, refaz sem a coluna
           try {
-            await reqUpd.query(`
-              UPDATE dbo.bloco_lancamentos
-                SET status = 'BAIXADO NO FINANCEIRO',
-                    observacao = LEFT(CONCAT(COALESCE(observacao,''), ' (baixa ${forma ?? ''}', @obsExtra, ')'), 300),
-                    atualizado_em = SYSUTCDATETIME()
-                WHERE id = @id
-            `);
-          } catch (e: any) {
-            const num = e?.number ?? e?.originalError?.number;
-            const msg = String(e?.message || "");
-            if (num !== 207 && !/Invalid column name 'atualizado_em'/i.test(msg)) throw e;
             await new sql.Request(tx)
               .input("id", sql.Int, lancIdToUpdate)
               .input("obsExtra", sql.VarChar(sql.MAX), (observacao ? ` • ${observacao}` : ""))
               .query(`
                 UPDATE dbo.bloco_lancamentos
-                SET status = 'BAIXADO NO FINANCEIRO',
-                    observacao = CONCAT(COALESCE(observacao,''), ' (baixa ${forma ?? ''}', @obsExtra, ')')
-                WHERE id = @id
+                   SET status = 'BAIXADO NO FINANCEIRO',
+                       observacao = LEFT(CONCAT(COALESCE(observacao,''), ' (baixa ${forma ?? ''}', @obsExtra, ')'), 300),
+                       atualizado_em = SYSUTCDATETIME()
+                 WHERE id = @id
+              `);
+          } catch (e: any) {
+            // fallback sem atualizado_em
+            await new sql.Request(tx)
+              .input("id", sql.Int, lancIdToUpdate)
+              .input("obsExtra", sql.VarChar(sql.MAX), (observacao ? ` • ${observacao}` : ""))
+              .query(`
+                UPDATE dbo.bloco_lancamentos
+                   SET status = 'BAIXADO NO FINANCEIRO',
+                       observacao = CONCAT(COALESCE(observacao,''), ' (baixa ${forma ?? ''}', @obsExtra, ')')
+                 WHERE id = @id
               `);
           }
         }
@@ -190,13 +191,83 @@ export const registrarBaixaTitulo = async (req: AuthenticatedRequest, res: Respo
   }
 };
 
+/* ======================================================================
+   1.1) ESTORNAR BAIXA (volta o título para ABERTO e o lançamento do bloco para EM ABERTO)
+   ====================================================================== */
+
+// === ESTORNO DE BAIXA DE TÍTULO (corrigido para usar PENDENTE no bloco) ===
+export const estornarBaixaTitulo = async (req: AuthenticatedRequest, res: Response) => {
+  const tituloId = Number(req.params.id);
+  if (!Number.isFinite(tituloId)) return res.status(400).json({ message: "ID inválido" });
+
+  try {
+    const titulo = await fetchTituloById(tituloId);
+
+    if (Number(titulo.valor_baixado || 0) <= 0 && titulo.status !== "BAIXADO") {
+      return res.status(400).json({ message: "Título não está baixado." });
+    }
+
+    const tx = new sql.Transaction(pool);
+    await tx.begin();
+    try {
+      // 1) Título volta a ABERTO (tabela: financeiro_titulos)
+      await new sql.Request(tx)
+        .input("id", sql.Int, titulo.id)
+        .query(`
+          UPDATE dbo.financeiro_titulos
+             SET valor_baixado = 0,
+                 status = 'ABERTO'
+           WHERE id = @id
+        `);
+
+      // 2) Lançamento do bloco volta para PENDENTE (tabela: bloco_lancamentos)
+      if (titulo.bloco_id) {
+        const lancIdToUpdate = await resolveLancId(tx, titulo);
+        if (lancIdToUpdate) {
+          try {
+            await new sql.Request(tx)
+              .input("id", sql.Int, lancIdToUpdate)
+              .query(`
+                UPDATE dbo.bloco_lancamentos
+                   SET status = 'PENDENTE',
+                       observacao = LEFT(CONCAT(COALESCE(observacao,''), ' (estorno de baixa)'), 300),
+                       atualizado_em = SYSUTCDATETIME()
+                 WHERE id = @id
+              `);
+          } catch {
+            // fallback sem coluna atualizado_em
+            await new sql.Request(tx)
+              .input("id", sql.Int, lancIdToUpdate)
+              .query(`
+                UPDATE dbo.bloco_lancamentos
+                   SET status = 'PENDENTE',
+                       observacao = CONCAT(COALESCE(observacao,''), ' (estorno de baixa)')
+                 WHERE id = @id
+              `);
+          }
+        }
+      }
+
+      await tx.commit();
+      return res.json({ message: "Estorno realizado", status: "ABERTO", valor_baixado: 0 });
+    } catch (e) {
+      await tx.rollback();
+      throw e;
+    }
+  } catch (e) {
+    console.error("Erro ao estornar baixa:", e);
+    return res.status(500).json({ message: "Erro interno no servidor" });
+  }
+};
+
+
 
 /* ======================================================================
    2) LISTAGEM DE TÍTULOS (usada pelo /financeiro/receber)
    ====================================================================== */
 
 const listTitulosQuery = z.object({
-  status: z.string().optional(),
+  status: z.string().optional(),  // "ABERTO,PARCIAL" | "BAIXADO" | "ABERTO,PARCIAL,BAIXADO"
   tipo: z.string().optional(),
   de: z.string().optional(),
   ate: z.string().optional(),
@@ -213,12 +284,10 @@ export const listTitulos = async (req: Request, res: Response) => {
     const offset = (page - 1) * pageSize;
 
     const where: string[] = [];
-    const baseReq = pool.request()
-      .input("limit", sql.Int, pageSize)
-      .input("offset", sql.Int, offset);
+    const baseReq = pool.request().input("limit", sql.Int, pageSize).input("offset", sql.Int, offset);
 
     if (status) {
-      const parts = status.split(",").map(s => s.trim().toUpperCase()).filter(Boolean);
+      const parts = status.split(",").map((s) => s.trim().toUpperCase()).filter(Boolean);
       if (parts.length) {
         const inParams: string[] = [];
         parts.forEach((st, idx) => {
@@ -264,12 +333,9 @@ export const listTitulos = async (req: Request, res: Response) => {
     `);
     const total = Number(totalRs.recordset[0]?.total ?? 0);
 
-    const pageReq = pool.request()
-      .input("limit", sql.Int, pageSize)
-      .input("offset", sql.Int, offset);
-
+    const pageReq = pool.request().input("limit", sql.Int, pageSize).input("offset", sql.Int, offset);
     if (status) {
-      const parts = status.split(",").map(s => s.trim().toUpperCase()).filter(Boolean);
+      const parts = status.split(",").map((s) => s.trim().toUpperCase()).filter(Boolean);
       parts.forEach((st, idx) => pageReq.input(`st${idx}`, sql.VarChar(20), st));
     }
     if (tipo) pageReq.input("tipo", sql.VarChar(30), tipo.toUpperCase());
@@ -297,12 +363,7 @@ export const listTitulos = async (req: Request, res: Response) => {
       OFFSET @offset ROWS FETCH NEXT @limit ROWS ONLY
     `);
 
-    return res.json({
-      data: rs.recordset,
-      page,
-      pageSize,
-      total,
-    });
+    return res.json({ data: rs.recordset, page, pageSize, total });
   } catch (err) {
     console.error("Erro em listTitulos:", err);
     return res.status(500).json({ message: "Erro interno no servidor" });
@@ -311,11 +372,11 @@ export const listTitulos = async (req: Request, res: Response) => {
 
 /* ======================================================================
    3) CONFERÊNCIA DIÁRIA e 4) ATUALIZAR CONFERÊNCIA
-   (inalterados em relação ao teu último envio)
+   (inalterados em relação ao teu último envio, mantidos)
    ====================================================================== */
 
 const conferenciaQuery = z.object({
-  data: z.string().optional(),          // YYYY-MM-DD
+  data: z.string().optional(),
   operador_id: z.coerce.number().optional(),
   cliente_id: z.coerce.number().optional(),
 });
@@ -326,7 +387,8 @@ export const conferenciaDiaria = async (req: Request, res: Response) => {
     const dia = toISODateOnly(data ?? new Date().toISOString().slice(0, 10));
     if (!dia) return res.status(400).json({ message: "Data inválida" });
 
-    const r = await pool.request()
+    const r = await pool
+      .request()
       .input("dia", sql.Date, new Date(dia))
       .input("cliente_id", cliente_id ?? null)
       .query(`
@@ -398,12 +460,7 @@ export const conferenciaDiaria = async (req: Request, res: Response) => {
       resumo[k] = (resumo[k] ?? 0) + Number(it.valor || 0);
     }
 
-    return res.json({
-      data: dia,
-      total: itens.length,
-      resumo,
-      itens,
-    });
+    return res.json({ data: dia, total: itens.length, resumo, itens });
   } catch (err) {
     console.error("Erro em conferenciaDiaria:", err);
     return res.status(500).json({ message: "Erro interno no servidor" });
@@ -414,26 +471,18 @@ const conferenciaAtualizarSchema = z.object({
   data: z.string().optional(),
   status: z.enum(["PENDENTE", "CONFIRMADO", "DIVERGENTE"]),
   comentario: z.string().optional(),
-  itens: z.array(
-    z.object({
-      origem: z.enum(["BLOCO_LANC", "TITULO", "BAIXA"]),
-      origem_id: z.number().int().positive(),
-    })
-  ).min(1),
+  itens: z
+    .array(
+      z.object({
+        origem: z.enum(["BLOCO_LANC", "TITULO", "BAIXA"]),
+        origem_id: z.number().int().positive(),
+      })
+    )
+    .min(1),
 });
 
 export const conferenciaAtualizar = async (req: AuthenticatedRequest, res: Response) => {
   try {
-    const conferenciaAtualizarSchema = z.object({
-      data: z.string().optional(),
-      status: z.enum(["PENDENTE", "CONFIRMADO", "DIVERGENTE"]),
-      comentario: z.string().optional(),
-      itens: z.array(z.object({
-        origem: z.enum(["BLOCO_LANC", "TITULO", "BAIXA"]),
-        origem_id: z.number().int().positive(),
-      })).min(1),
-    });
-
     const { status, comentario, itens } = conferenciaAtualizarSchema.parse(req.body);
     const userId = req.user?.id ?? null;
 
@@ -450,47 +499,30 @@ export const conferenciaAtualizar = async (req: AuthenticatedRequest, res: Respo
         if (ref_tipo === "TITULO") {
           const r = await new sql.Request(tx)
             .input("id", sql.Int, ref_id)
-            .query(`SELECT TOP 1 CAST(COALESCE(bom_para, created_at) AS date) AS data_ref FROM dbo.financeiro_titulos WHERE id = @id`);
+            .query(
+              `SELECT TOP 1 CAST(COALESCE(bom_para, created_at) AS date) AS data_ref FROM dbo.financeiro_titulos WHERE id = @id`
+            );
           if (r.recordset.length) data_ref = r.recordset[0].data_ref;
         } else {
           const r = await new sql.Request(tx)
             .input("id", sql.Int, ref_id)
-            .query(`SELECT TOP 1 CAST(data_lancamento AS date) AS data_ref FROM dbo.bloco_lancamentos WHERE id = @id`);
+            .query(
+              `SELECT TOP 1 CAST(data_lancamento AS date) AS data_ref FROM dbo.bloco_lancamentos WHERE id = @id`
+            );
           if (r.recordset.length) data_ref = r.recordset[0].data_ref;
         }
 
         const exists = await new sql.Request(tx)
           .input("ref_tipo", sql.VarChar(20), ref_tipo)
           .input("ref_id", sql.Int, ref_id)
-          .query(`SELECT TOP 1 id FROM dbo.financeiro_conferencia WHERE ref_tipo=@ref_tipo AND ref_id=@ref_id`);
+          .query(
+            `SELECT TOP 1 id FROM dbo.financeiro_conferencia WHERE ref_tipo=@ref_tipo AND ref_id=@ref_id`
+          );
 
         const obs = status === "DIVERGENTE" ? (comentario ?? null) : null;
 
         if (exists.recordset.length) {
-          const reqUpd = new sql.Request(tx)
-            .input("ref_tipo", sql.VarChar(20), ref_tipo)
-            .input("ref_id", sql.Int, ref_id)
-            .input("status", sql.VarChar(15), status)
-            .input("obs", sql.VarChar(400), obs)
-            .input("conferido_por", userId)
-            .input("conferido_em", status === "PENDENTE" ? null : new Date())
-            .input("data_ref", data_ref);
-
           try {
-            await reqUpd.query(`
-              UPDATE dbo.financeiro_conferencia
-              SET status = @status,
-                  obs = @obs,
-                  conferido_por = @conferido_por,
-                  conferido_em = @conferido_em,
-                  data_ref = COALESCE(@data_ref, data_ref),
-                  atualizado_em = SYSUTCDATETIME()
-              WHERE ref_tipo = @ref_tipo AND ref_id = @ref_id
-            `);
-          } catch (e: any) {
-            const num = e?.number ?? e?.originalError?.number;
-            const msg = String(e?.message || "");
-            if (num !== 207 && !/Invalid column name 'atualizado_em'/i.test(msg)) throw e;
             await new sql.Request(tx)
               .input("ref_tipo", sql.VarChar(20), ref_tipo)
               .input("ref_id", sql.Int, ref_id)
@@ -501,35 +533,50 @@ export const conferenciaAtualizar = async (req: AuthenticatedRequest, res: Respo
               .input("data_ref", data_ref)
               .query(`
                 UPDATE dbo.financeiro_conferencia
-                SET status = @status,
-                    obs = @obs,
-                    conferido_por = @conferido_por,
-                    conferido_em = @conferido_em,
-                    data_ref = COALESCE(@data_ref, data_ref)
-                WHERE ref_tipo = @ref_tipo AND ref_id = @ref_id
+                   SET status = @status,
+                       obs = @obs,
+                       conferido_por = @conferido_por,
+                       conferido_em = @conferido_em,
+                       data_ref = COALESCE(@data_ref, data_ref),
+                       atualizado_em = SYSUTCDATETIME()
+                 WHERE ref_tipo = @ref_tipo AND ref_id = @ref_id
+              `);
+          } catch (e: any) {
+            await new sql.Request(tx)
+              .input("ref_tipo", sql.VarChar(20), ref_tipo)
+              .input("ref_id", sql.Int, ref_id)
+              .input("status", sql.VarChar(15), status)
+              .input("obs", sql.VarChar(400), obs)
+              .input("conferido_por", userId)
+              .input("conferido_em", status === "PENDENTE" ? null : new Date())
+              .input("data_ref", data_ref)
+              .query(`
+                UPDATE dbo.financeiro_conferencia
+                   SET status = @status,
+                       obs = @obs,
+                       conferido_por = @conferido_por,
+                       conferido_em = @conferido_em,
+                       data_ref = COALESCE(@data_ref, data_ref)
+                 WHERE ref_tipo = @ref_tipo AND ref_id = @ref_id
               `);
           }
         } else {
-          const reqIns = new sql.Request(tx)
-            .input("ref_tipo", sql.VarChar(20), ref_tipo)
-            .input("ref_id", sql.Int, ref_id)
-            .input("status", sql.VarChar(15), status)
-            .input("obs", sql.VarChar(400), obs)
-            .input("conferido_por", userId)
-            .input("conferido_em", status === "PENDENTE" ? null : new Date())
-            .input("data_ref", data_ref);
-
           try {
-            await reqIns.query(`
-              INSERT INTO dbo.financeiro_conferencia
-                (ref_tipo, ref_id, status, obs, conferido_por, conferido_em, data_ref, criado_em, atualizado_em)
-              VALUES
-                (@ref_tipo, @ref_id, @status, @obs, @conferido_por, @conferido_em, @data_ref, SYSUTCDATETIME(), SYSUTCDATETIME())
-            `);
+            await new sql.Request(tx)
+              .input("ref_tipo", sql.VarChar(20), ref_tipo)
+              .input("ref_id", sql.Int, ref_id)
+              .input("status", sql.VarChar(15), status)
+              .input("obs", sql.VarChar(400), obs)
+              .input("conferido_por", userId)
+              .input("conferido_em", status === "PENDENTE" ? null : new Date())
+              .input("data_ref", data_ref)
+              .query(`
+                INSERT INTO dbo.financeiro_conferencia
+                  (ref_tipo, ref_id, status, obs, conferido_por, conferido_em, data_ref, criado_em, atualizado_em)
+                VALUES
+                  (@ref_tipo, @ref_id, @status, @obs, @conferido_por, @conferido_em, @data_ref, SYSUTCDATETIME(), SYSUTCDATETIME())
+              `);
           } catch (e: any) {
-            const num = e?.number ?? e?.originalError?.number;
-            const msg = String(e?.message || "");
-            if (num !== 207 && !/Invalid column name 'atualizado_em'/i.test(msg)) throw e;
             await new sql.Request(tx)
               .input("ref_tipo", sql.VarChar(20), ref_tipo)
               .input("ref_id", sql.Int, ref_id)
