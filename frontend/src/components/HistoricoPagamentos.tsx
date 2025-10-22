@@ -34,20 +34,23 @@ function IconRefresh({ size = 18, className = "" }: { size?: number; className?:
 type RowAPI = {
   id: number;
   cliente_id: number;
-  valor: number;                   // pode vir sempre positivo no backend
+  valor: number;                   // backend pode mandar sempre positivo
   forma_pagamento: string;
   criado_em: string;               // ISO
   observacao?: string | null;
   cliente_nome?: string | null;
 
-  // alguns backends já mandam a direção:
+  // às vezes o backend já manda o sentido:
   tipo?: string | null;            // "ENTRADA" | "SAIDA"
   natureza?: string | null;        // "ENTRADA" | "SAIDA" | "E" | "S"
   movimento?: string | null;       // idem
 };
 
 type Row = RowAPI & {
-  valor_assinado: number;          // +entrada / -saída (normalizado)
+  /** Convenção do sistema:
+   *  SAÍDA = +valor   |   ENTRADA = −valor
+   */
+  valor_assinado: number;
   direcao: "ENTRADA" | "SAIDA";
 };
 
@@ -68,6 +71,7 @@ const formaTone = (f: string) => {
   if (s.includes("CHEQUE")) return "sky";
   if (s.includes("ESTORNO") || s.includes("DEVOL") || s.includes("TROCO")) return "rose";
   if (s.includes("SALDO")) return "slate";
+  if (s.includes("PEDIDO")) return "amber";
   return "amber";
 };
 
@@ -88,39 +92,53 @@ function useDebounce<T>(value: T, ms = 300) {
   return v;
 }
 
-function looksLikeSaida(row: RowAPI) {
-  const t = (row.tipo || row.natureza || row.movimento || "").toString().toUpperCase();
-  if (t === "SAIDA" || t === "S") return true;
-  if (t === "ENTRADA" || t === "E") return false;
+/* ==================== Normalização (ENTRADA = − | SAÍDA = +) ==================== */
 
-  const obs = (row.observacao || "").toUpperCase();
-  if (obs.includes("BAIXA")) return true;
-  if (obs.includes("ESTORNO")) return true;
-  if (obs.includes("DEVOLU")) return true;
-
-  const forma = (row.forma_pagamento || "").toUpperCase();
-  if (forma.includes("ESTORNO") || forma.includes("TROCO")) return true;
-
-  return false;
+function isSaidaByObs(obs?: string | null) {
+  const s = (obs || "").toUpperCase();
+  return s.includes("BAIXA") || s.includes("ESTORNO") || s.includes("DEVOLU");
 }
 
+function isSaidaByForma(forma?: string | null) {
+  const f = (forma || "").toUpperCase();
+  return f.includes("ESTORNO") || f.includes("TROCO");
+}
+
+function isEntradaByForma(forma?: string | null) {
+  const f = (forma || "").toUpperCase();
+  return (
+    f.includes("SALDO") ||
+    f.includes("PEDIDO") ||
+    f.includes("PIX") ||
+    f.includes("BOLETO") ||
+    f.includes("CHEQUE") ||
+    f.includes("DEPOS") ||
+    f.includes("DINHEIRO") ||
+    f.includes("CART")
+  );
+}
+
+/** Aplica a convenção do sistema:
+ *  SAÍDA = +valor   |   ENTRADA = −valor
+ */
 function normalizeRow(r: RowAPI): Row {
-  // se já vier assinado do backend, preserva; senão, decide pelo tipo/obs
-  let signed = Number(r.valor) || 0;
-  let direcao: "ENTRADA" | "SAIDA" = signed < 0 ? "SAIDA" : "ENTRADA";
+  const abs = Math.abs(Number(r.valor) || 0);
 
-  if (signed >= 0) {
-    if (looksLikeSaida(r)) {
-      signed = -Math.abs(signed);
-      direcao = "SAIDA";
-    } else {
-      direcao = "ENTRADA";
-    }
-  } else {
-    direcao = "SAIDA";
-  }
+  // 1) campos explícitos do backend têm prioridade
+  const t = (r.tipo || r.natureza || r.movimento || "").toString().toUpperCase();
+  if (t === "SAIDA" || t === "S") return { ...r, direcao: "SAIDA", valor_assinado: +abs };
+  if (t === "ENTRADA" || t === "E") return { ...r, direcao: "ENTRADA", valor_assinado: -abs };
 
-  return { ...r, valor_assinado: signed, direcao };
+  // 2) heurística por observação/forma
+  const saidaObs = isSaidaByObs(r.observacao);
+  const saidaForma = isSaidaByForma(r.forma_pagamento);
+  const entradaForma = isEntradaByForma(r.forma_pagamento);
+
+  if (saidaObs || saidaForma) return { ...r, direcao: "SAIDA", valor_assinado: +abs };
+  if (entradaForma) return { ...r, direcao: "ENTRADA", valor_assinado: -abs };
+
+  // 3) fallback seguro: considerar ENTRADA (−)
+  return { ...r, direcao: "ENTRADA", valor_assinado: -abs };
 }
 
 /* ==================== Componente ==================== */
@@ -260,27 +278,34 @@ export default function HistoricoPagamentos() {
   function onChangeFrom(v: string) { setFrom(v); setRange(null); }
   function onChangeTo(v: string) { setTo(v); setRange(null); }
 
-  // métricas do que está sendo exibido (filtrado)
+  /* ===== métricas (com a convenção ENTRADA=− / SAÍDA=+) ===== */
+  function sumTotals(list: Row[]) {
+    const entradas = list.filter(r => r.direcao === "ENTRADA").reduce((a, r) => a + Math.abs(r.valor_assinado), 0);
+    const saidas   = list.filter(r => r.direcao === "SAIDA").reduce((a, r) => a + Math.abs(r.valor_assinado), 0);
+    return { entradas, saidas };
+  }
+
   const stats = useMemo(() => {
-    const entradas = rows.filter((r) => r.valor_assinado >= 0);
-    const saídas   = rows.filter((r) => r.valor_assinado < 0);
+    const { entradas, saidas } = sumTotals(rows);
     return {
       count: rows.length,
-      totalEntradas: entradas.reduce((a, r) => a + r.valor_assinado, 0),
-      totalSaidas: Math.abs(saídas.reduce((a, r) => a + r.valor_assinado, 0)),
+      totalEntradas: entradas,
+      totalSaidas: saidas,
     };
   }, [rows]);
-  const saldo = stats.totalEntradas - stats.totalSaidas;
 
-  // saldo inicial (antes do período) e final (inicial + saldo do recorte)
+  const saldo = stats.totalEntradas - stats.totalSaidas; // saldo do recorte (Entradas − Saídas)
+
+  // saldo inicial (antes do período) e final (inicial + movimento)
   const saldoInicial = useMemo(() => {
     if (!from) return 0;
     const ts = new Date(`${from}T00:00:00`).getTime();
-    return sourceRows
-      .filter((r) => +new Date(r.criado_em) < ts)
-      .reduce((a, r) => a + r.valor_assinado, 0);
+    const prev = sourceRows.filter(r => +new Date(r.criado_em) < ts);
+    const { entradas, saidas } = sumTotals(prev);
+    return entradas - saidas;
   }, [from, sourceRows]);
-  const saldoFinal = saldoInicial + (rows.reduce((a, r) => a + r.valor_assinado, 0));
+
+  const saldoFinal = saldoInicial + saldo;
 
   // resumo por forma (do que está filtrado)
   const resumoPorForma = useMemo(() => {
@@ -290,22 +315,21 @@ export default function HistoricoPagamentos() {
       if (!map.has(key)) map.set(key, { entradas: 0, saidas: 0, count: 0 });
       const obj = map.get(key)!;
       obj.count += 1;
-      if (r.valor_assinado >= 0) obj.entradas += r.valor_assinado;
+      if (r.direcao === "ENTRADA") obj.entradas += Math.abs(r.valor_assinado);
       else obj.saidas += Math.abs(r.valor_assinado);
     }
-    // ordena por volume total
     return Array.from(map.entries()).sort(
       (a, b) => (b[1].entradas + b[1].saidas) - (a[1].entradas + a[1].saidas)
     ).slice(0, 8);
   }, [rows]);
 
-  // exporta o que está na tela (filtrado)
+  // exporta o que está na tela (filtrado) — mantém o sinal do sistema
   function exportCsv() {
     const header = ["cliente", "direcao", "valor", "forma", "data", "observacao"];
     const lines = rows.map((r) => [
       getClientName(r.cliente_id, r.cliente_nome),
       r.direcao,
-      String(r.valor_assinado).replace(".", ","), // já assinado (+ / -)
+      String(r.valor_assinado).replace(".", ","), // ENTRADA negativa, SAÍDA positiva
       r.forma_pagamento,
       dtBR(r.criado_em),
       (r.observacao ?? "").replaceAll('"', '""'),
@@ -324,7 +348,7 @@ export default function HistoricoPagamentos() {
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="text-white">
             <h1 className="text-2xl font-semibold tracking-tight">Histórico de pagamentos</h1>
-            <p className="text-slate-300 text-sm">Entradas, saídas, filtros e exportação.</p>
+            <p className="text-slate-300 text-sm">Saídas <b>(+ verde)</b>, Entradas <b>(− vermelho)</b>, filtros e exportação.</p>
           </div>
           <div className="flex items-center gap-2">
             <button onClick={reload}
@@ -340,14 +364,15 @@ export default function HistoricoPagamentos() {
 
         <div className="mt-4 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           <StatCardDark title="Lançamentos" value={String(stats.count)} />
-          <StatCardDark title="Entradas" value={money(stats.totalEntradas)} tone="emerald" />
-          <StatCardDark title="Saídas" value={money(stats.totalSaidas)} tone="rose" />
-          <StatCardDark title="Saldo" value={money(saldo)} tone={saldo >= 0 ? "emerald" : "rose"} />
+          <StatCardDark title="Entradas (−)" value={money(stats.totalEntradas)} tone="rose" />
+          <StatCardDark title="Saídas (+)" value={money(stats.totalSaidas)} tone="emerald" />
+          <StatCardDark title="Saldo (Entradas − Saídas)" value={money(saldo)} tone={saldo >= 0 ? "emerald" : "rose"} />
         </div>
+
         {(from || to) && (
           <div className="mt-3 grid gap-3 sm:grid-cols-3 text-[12px] text-slate-200">
             <div className="rounded-xl bg-white/5 px-3 py-2">Saldo inicial do período: <b>{money(saldoInicial)}</b></div>
-            <div className="rounded-xl bg-white/5 px-3 py-2">Movimento no período: <b>{money(rows.reduce((a, r) => a + r.valor_assinado, 0))}</b></div>
+            <div className="rounded-xl bg-white/5 px-3 py-2">Movimento no período: <b>{money(saldo)}</b></div>
             <div className="rounded-xl bg-white/5 px-3 py-2">Saldo final (estimado): <b>{money(saldoFinal)}</b></div>
           </div>
         )}
@@ -422,7 +447,7 @@ export default function HistoricoPagamentos() {
                 <button key={k}
                   className={`flex-1 rounded-lg px-3 py-1 ${tipoFilter===k ? "bg-slate-900 text-white" : "hover:bg-slate-50"}`}
                   onClick={() => { setTipoFilter(k); applyFilters(sourceRows, { tipo: k }); }}>
-                  {k === "ALL" ? "Todos" : k === "ENTRADA" ? "Entradas" : "Saídas"}
+                  {k === "ALL" ? "Todos" : k === "ENTRADA" ? "Entradas (−)" : "Saídas (+)"}
                 </button>
               ))}
             </div>
@@ -485,8 +510,12 @@ export default function HistoricoPagamentos() {
                   <Badge tone={formaTone(forma)}>{forma}</Badge>
                   <span className="text-[11px] text-slate-500">{v.count} reg.</span>
                 </div>
-                <div className="text-xs text-slate-600">Entradas: <b className="text-emerald-700">{money(v.entradas)}</b></div>
-                <div className="text-xs text-slate-600">Saídas: <b className="text-rose-700">{money(v.saidas)}</b></div>
+                <div className="text-xs text-slate-600">
+                  Entradas: <b className="text-rose-700">- {money(v.entradas)}</b>
+                </div>
+                <div className="text-xs text-slate-600">
+                  Saídas: <b className="text-emerald-700">+ {money(v.saidas)}</b>
+                </div>
               </div>
             ))}
           </div>
@@ -521,7 +550,8 @@ export default function HistoricoPagamentos() {
             {!loading &&
               rows.map((r) => {
                 const nome = getClientName(r.cliente_id, r.cliente_nome);
-                const isEntrada = r.valor_assinado >= 0;
+                const isSaida = r.direcao === "SAIDA";
+                const sign = isSaida ? "+" : "−";
                 return (
                   <tr key={r.id} className="hover:bg-slate-50">
                     <td className="border p-2">
@@ -533,10 +563,10 @@ export default function HistoricoPagamentos() {
                       </div>
                     </td>
                     <td className="border p-2 whitespace-nowrap">
-                      {isEntrada ? <Badge tone="emerald">ENTRADA</Badge> : <Badge tone="rose">SAÍDA</Badge>}
+                      {isSaida ? <Badge tone="emerald">SAÍDA (+)</Badge> : <Badge tone="rose">ENTRADA (−)</Badge>}
                     </td>
-                    <td className={`border p-2 font-semibold whitespace-nowrap ${isEntrada ? "text-emerald-700" : "text-rose-700"}`}>
-                      {money(r.valor_assinado)}
+                    <td className={`border p-2 font-semibold whitespace-nowrap ${isSaida ? "text-emerald-700" : "text-rose-700"}`}>
+                      {sign} {money(Math.abs(r.valor_assinado))}
                     </td>
                     <td className="border p-2"><Badge tone={formaTone(r.forma_pagamento)}>{r.forma_pagamento}</Badge></td>
                     <td className="border p-2 whitespace-nowrap">{dtBR(r.criado_em)}</td>
@@ -558,7 +588,9 @@ export default function HistoricoPagamentos() {
                 <td className="border p-2 text-right font-medium" colSpan={2}>
                   Totais ({rows.length} {rows.length === 1 ? "lançamento" : "lançamentos"}):
                 </td>
-                <td className="border p-2 font-semibold">{money(rows.reduce((a, r) => a + r.valor_assinado, 0))}</td>
+                <td className={`border p-2 font-semibold ${saldo >= 0 ? "text-emerald-700" : "text-rose-700"}`}>
+                  {saldo >= 0 ? "+" : "−"} {money(Math.abs(saldo))}
+                </td>
                 <td className="border p-2" colSpan={3}></td>
               </tr>
             </tfoot>

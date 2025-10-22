@@ -2,6 +2,7 @@ import { Router } from "express";
 import { protect, authorize } from "../middleware/auth.middleware";
 import {
   registrarBaixaTitulo,
+  estornarBaixaTitulo,
   listTitulos,
   conferenciaDiaria,
   conferenciaAtualizar,
@@ -14,11 +15,18 @@ router.use(protect);
 // listar títulos (usado no /financeiro/receber)
 router.get("/titulos", authorize("admin", "financeiro", "vendedor"), listTitulos);
 
-// baixa de título — caminho que o front está chamando
+// registrar baixa
 router.post(
   "/titulos/:id/baixas",
   authorize("admin", "financeiro"),
   registrarBaixaTitulo
+);
+
+// estornar baixa
+router.post(
+  "/titulos/:id/estornos",
+  authorize("admin", "financeiro"),
+  estornarBaixaTitulo
 );
 
 /** Conferência diária */
