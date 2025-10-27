@@ -9,6 +9,6 @@ router.post("/login", login);
 
 // protegidas
 router.get("/me", protect, me);
-router.post("/register", protect, authorize("admin", "administrador"), register);
+router.post("/register", protect, authorize("admin"), register);
 
 export default router;
