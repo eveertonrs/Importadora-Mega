@@ -1,5 +1,4 @@
 // src/components/ui/StatusBadge.tsx
-import React from "react";
 
 const colors: Record<string, string> = {
   ABERTO: "bg-red-100 text-red-700",

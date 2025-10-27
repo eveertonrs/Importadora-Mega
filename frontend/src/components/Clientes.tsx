@@ -290,7 +290,7 @@ export default function Clientes() {
 
           {/* Itens */}
           {!loading &&
-            rows.map((c, idx) => (
+            rows.map((c) => (
               <RowItem
                 key={c.id}
                 c={c}
