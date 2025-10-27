@@ -14,13 +14,14 @@ router.use(protect);
 
 router
   .route("/")
-  .get(authorize("admin", "financeiro", "vendedor"), getTransportadoras) // ?search=&page=&limit=&ativo=
-  .post(authorize("admin", "financeiro"), createTransportadora);
+  .get(authorize("admin", "financeiro", "vendedor", "administrativo"), getTransportadoras)
+  .post(authorize("admin", "financeiro", "administrativo"), createTransportadora);
 
 router
   .route("/:id")
-  .get(authorize("admin", "financeiro", "vendedor"), getTransportadoraById)
-  .put(authorize("admin", "financeiro"), updateTransportadora)
-  .delete(authorize("admin", "financeiro"), deleteTransportadora);
+  .get(authorize("admin", "financeiro", "vendedor", "administrativo"), getTransportadoraById)
+  .put(authorize("admin", "financeiro", "administrativo"), updateTransportadora)
+  // exclusão: somente admin
+  .delete(authorize("admin"), deleteTransportadora);
 
 export default router;

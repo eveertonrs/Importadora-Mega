@@ -1,0 +1,18 @@
+backend@1.0.0 C:\Projetos\Pessoas\Importadora Mega\MEGA\backend
+ิ๖ฃิ๖วิ๖ว @types/bcryptjs@2.4.6
+ิ๖ฃิ๖วิ๖ว @types/cors@2.8.19
+ิ๖ฃิ๖วิ๖ว @types/express@5.0.3
+ิ๖ฃิ๖วิ๖ว @types/jsonwebtoken@9.0.10
+ิ๖ฃิ๖วิ๖ว @types/mssql@9.1.8
+ิ๖ฃิ๖วิ๖ว @types/node@20.19.12
+ิ๖ฃิ๖วิ๖ว bcryptjs@2.4.3
+ิ๖ฃิ๖วิ๖ว cors@2.8.5
+ิ๖ฃิ๖วิ๖ว dotenv@16.6.1
+ิ๖ฃิ๖วิ๖ว express@5.1.0
+ิ๖ฃิ๖วิ๖ว jsonwebtoken@9.0.2
+ิ๖ฃิ๖วิ๖ว morgan@1.10.1
+ิ๖ฃิ๖วิ๖ว mssql@11.0.1
+ิ๖ฃิ๖วิ๖ว ts-node-dev@2.0.0
+ิ๖ฃิ๖วิ๖ว typescript@5.9.2
+ิ๖๖ิ๖วิ๖ว zod@3.25.76
+

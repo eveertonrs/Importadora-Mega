@@ -13,33 +13,46 @@ import formasPagamentoRoutes from "./routes/formasPagamento.routes";
 import pagamentosRoutes from "./routes/pagamentos.routes";
 import pedidoParametrosRoutes from "./routes/pedidoParametros.routes";
 import financeiroRoutes from "./routes/financeiro.routes";
+import usuariosRoutes from "./routes/usuarios.routes";
+
 import { connectDB } from "./db";
 
 const app = express();
 
+/* ---------- config ---------- */
+const API_PREFIX = (process.env.API_PREFIX || "/api").replace(/\/+$/, ""); // default: /api
+
 /* ---------- middlewares básicos ---------- */
-app.use(cors());
+app.use(
+  cors({
+    origin: process.env.CORS_ORIGIN
+      ? process.env.CORS_ORIGIN.split(",").map((s) => s.trim())
+      : true, // libera tudo em dev; configure CORS_ORIGIN em prod
+    credentials: false,
+  })
+);
 // app.use(morgan("dev"));
 app.use(express.json({ limit: "10mb" }));
 app.use(express.urlencoded({ extended: false }));
 
 /* ---------- rotas públicas simples ---------- */
 app.get("/", (_req, res) => res.send("API is running"));
-app.get("/healthz", (_req, res) => res.status(200).json({ status: "ok" }));
-app.get("/ready", (_req, res) => res.status(200).json({ ready: true }));
-/* ---------- rotas da aplicação ---------- */
-app.use("/auth", authRoutes);
-app.use("/clientes", clientesRoutes);
-app.use("/blocos", blocosRoutes);
-app.use("/dominios", dominiosRoutes);
-app.use("/transportadoras", transportadorasRoutes);
-app.use("/fechamentos", fechamentosRoutes);
-app.use("/cheques", chequesRoutes);
-app.use("/pagamentos/formas", formasPagamentoRoutes);
-app.use("/pagamentos", pagamentosRoutes);
-app.use("/pedido-parametros", pedidoParametrosRoutes);
-app.use("/financeiro", financeiroRoutes);
+app.get(`${API_PREFIX}/healthz`, (_req, res) => res.status(200).json({ status: "ok" }));
+app.get(`${API_PREFIX}/ready`, (_req, res) => res.status(200).json({ ready: true }));
 
+/* ---------- rotas da aplicação (todas sob /api) ---------- */
+app.use(`${API_PREFIX}/auth`, authRoutes);
+app.use(`${API_PREFIX}/clientes`, clientesRoutes);
+app.use(`${API_PREFIX}/blocos`, blocosRoutes);
+app.use(`${API_PREFIX}/dominios`, dominiosRoutes);
+app.use(`${API_PREFIX}/transportadoras`, transportadorasRoutes);
+app.use(`${API_PREFIX}/fechamentos`, fechamentosRoutes);
+app.use(`${API_PREFIX}/cheques`, chequesRoutes);
+app.use(`${API_PREFIX}/pagamentos/formas`, formasPagamentoRoutes);
+app.use(`${API_PREFIX}/pagamentos`, pagamentosRoutes);
+app.use(`${API_PREFIX}/pedido-parametros`, pedidoParametrosRoutes);
+app.use(`${API_PREFIX}/financeiro`, financeiroRoutes);
+app.use(`${API_PREFIX}/usuarios`, usuariosRoutes);
 
 /* ---------- 404 ---------- */
 app.use((req, res) => {
@@ -61,13 +74,13 @@ app.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
 });
 
 /* ---------- bootstrap ---------- */
-const port = Number(process.env.PORT || 3333);
+const port = Number(process.env.PORT || 4010);
 
 async function start() {
   try {
     await connectDB();
     app.listen(port, () => {
-      console.log(`API on :${port}`);
+      console.log(`API on :${port} (prefix ${API_PREFIX})`);
     });
   } catch (e) {
     console.error("Falha ao iniciar a API:", e);

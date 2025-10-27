@@ -1,16 +1,15 @@
 // src/components/Login.tsx
 import React, { useState } from "react";
-import axios from "axios";
 import { useNavigate } from "react-router-dom";
+import api from "../services/api";
 import { useAuth } from "../contexts/AuthContext";
-
-const API_URL = import.meta.env.VITE_API_URL ?? "https://x3nbflkg-3333.brs.devtunnels.ms";
 
 const Login: React.FC = () => {
   const [email, setEmail] = useState("");
   const [senha, setSenha] = useState("");
   const [error, setError] = useState<string>("");
   const [loading, setLoading] = useState(false);
+
   const navigate = useNavigate();
   const auth = useAuth();
 
@@ -20,30 +19,30 @@ const Login: React.FC = () => {
     setLoading(true);
 
     try {
-      const { data } = await axios.post(`${API_URL}/auth/login`, { email, senha });
+      const { data } = await api.post("/auth/login", { email, senha });
       const { token, user } = data;
 
       localStorage.setItem("token", token);
       localStorage.setItem("user", JSON.stringify(user));
 
-      // Atualiza contexto se disponível
       auth?.setIsAuthenticated(true);
       auth?.setUser(user);
 
       navigate("/");
-    } catch (err) {
-      if (axios.isAxiosError(err)) {
-        setError(err.response?.data?.message || "Credenciais inválidas");
-      } else if (err instanceof Error) {
-        setError(err.message);
-      } else {
-        setError("Ocorreu um erro. Tente novamente.");
-      }
+    } catch (err: any) {
+      const msg =
+        err?.response?.data?.message ||
+        err?.response?.data?.error ||
+        err?.message ||
+        "Credenciais inválidas";
+      setError(msg);
       console.error("Erro no login:", err);
     } finally {
       setLoading(false);
     }
   };
+
+  const apiBase = api.defaults.baseURL ?? "";
 
   return (
     <div className="min-h-screen bg-gray-50 flex flex-col justify-center py-12 sm:px-6 lg:px-8">
@@ -112,7 +111,7 @@ const Login: React.FC = () => {
           </form>
 
           <p className="mt-4 text-xs text-gray-400 text-center">
-            API: <code>{API_URL}</code>
+            API: <code>{apiBase}</code>
           </p>
         </div>
       </div>

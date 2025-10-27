@@ -1,0 +1,21 @@
+frontend@0.0.0 C:\Projetos\Pessoas\Importadora Mega\MEGA\frontend
+ิ๖ฃิ๖วิ๖ว @eslint/js@9.35.0
+ิ๖ฃิ๖วิ๖ว @tailwindcss/vite@4.1.13
+ิ๖ฃิ๖วิ๖ว @types/react-dom@19.1.9
+ิ๖ฃิ๖วิ๖ว @types/react@19.1.12
+ิ๖ฃิ๖วิ๖ว @vitejs/plugin-react@5.0.2
+ิ๖ฃิ๖วิ๖ว autoprefixer@10.4.21
+ิ๖ฃิ๖วิ๖ว axios@1.11.0
+ิ๖ฃิ๖วิ๖ว eslint-plugin-react-hooks@5.2.0
+ิ๖ฃิ๖วิ๖ว eslint-plugin-react-refresh@0.4.20
+ิ๖ฃิ๖วิ๖ว eslint@9.35.0
+ิ๖ฃิ๖วิ๖ว globals@16.3.0
+ิ๖ฃิ๖วิ๖ว postcss@8.5.6
+ิ๖ฃิ๖วิ๖ว react-dom@19.1.1
+ิ๖ฃิ๖วิ๖ว react-router-dom@7.8.2
+ิ๖ฃิ๖วิ๖ว react@19.1.1
+ิ๖ฃิ๖วิ๖ว tailwindcss@4.1.13
+ิ๖ฃิ๖วิ๖ว typescript-eslint@8.43.0
+ิ๖ฃิ๖วิ๖ว typescript@5.8.3
+ิ๖๖ิ๖วิ๖ว vite@7.1.5
+

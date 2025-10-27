@@ -17,42 +17,45 @@ router.use(protect);
 /** CRUD + busca */
 router
   .route("/")
-  .get(authorize("admin", "financeiro", "vendedor"), clientesCtrl.getClientes)
-  .post(authorize("admin", "financeiro"), clientesCtrl.createCliente);
+  .get(authorize("admin", "financeiro", "vendedor", "administrativo"), clientesCtrl.getClientes)
+  .post(authorize("admin", "financeiro", "administrativo"), clientesCtrl.createCliente);
 
 router
   .route("/:id")
-  .get(authorize("admin", "financeiro", "vendedor"), clientesCtrl.getClienteById)
-  .put(authorize("admin", "financeiro"), clientesCtrl.updateCliente)
+  .get(authorize("admin", "financeiro", "vendedor", "administrativo"), clientesCtrl.getClienteById)
+  .put(authorize("admin", "financeiro", "administrativo"), clientesCtrl.updateCliente)
+  // excluir cliente: apenas admin
   .delete(authorize("admin"), clientesCtrl.deleteCliente);
 
 /** Saldo isolado */
 router.get(
   "/:id/saldo",
-  authorize("admin", "financeiro", "vendedor"),
+  authorize("admin", "financeiro", "vendedor", "administrativo"),
   clientesCtrl.getClienteSaldo
 );
 
 /** Transportadoras (granular) */
 router
   .route("/:id/transportadoras")
-  .get(authorize("admin", "financeiro", "vendedor"), listarTransportadorasDoCliente)
-  .post(authorize("admin", "financeiro"), vincularTransportadora);
+  .get(authorize("admin", "financeiro", "vendedor", "administrativo"), listarTransportadorasDoCliente)
+  .post(authorize("admin", "financeiro", "administrativo"), vincularTransportadora);
 
 router
   .route("/:id/transportadoras/:tid")
-  .patch(authorize("admin", "financeiro"), atualizarVinculo)
-  .delete(authorize("admin", "financeiro"), removerVinculo);
+  .patch(authorize("admin", "financeiro", "administrativo"), atualizarVinculo)
+  // remover vínculo (exclusão): apenas admin
+  .delete(authorize("admin"), removerVinculo);
 
 /** Documentos & links do cliente */
 router
   .route("/:cliente_id/documentos")
-  .get(authorize("admin", "financeiro", "vendedor"), clientesCtrl.listClienteDocumentos)
-  .post(authorize("admin", "financeiro"), clientesCtrl.createClienteDocumento);
+  .get(authorize("admin", "financeiro", "vendedor", "administrativo"), clientesCtrl.listClienteDocumentos)
+  .post(authorize("admin", "financeiro", "administrativo"), clientesCtrl.createClienteDocumento);
 
 router
   .route("/:cliente_id/documentos/:id")
-  .put(authorize("admin", "financeiro"), clientesCtrl.updateClienteDocumento)
-  .delete(authorize("admin", "financeiro"), clientesCtrl.deleteClienteDocumento);
+  .put(authorize("admin", "financeiro", "administrativo"), clientesCtrl.updateClienteDocumento)
+  // exclusão de documento: apenas admin
+  .delete(authorize("admin"), clientesCtrl.deleteClienteDocumento);
 
 export default router;

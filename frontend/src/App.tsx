@@ -7,7 +7,6 @@ import ErrorBoundary from "./components/ErrorBoundary";
 
 // públicas
 import Login from "./components/Login";
-import Register from "./components/Register";
 
 // home (dashboard)
 import Home from "./components/Home";
@@ -38,6 +37,7 @@ import Button from "./components/ui/button";
 
 // auth
 import { useAuth } from "./contexts/AuthContext";
+import ProtectedRoute from "./components/ProtectedRoute";
 
 // toast bridge
 import { NotifyBridge } from "./lib/notify-bridge";
@@ -47,29 +47,33 @@ import FinanceiroReceber from "./components/FinanceiroReceber";
 import Conferencia from "./components/financeiro/Conferencia";
 import { useState } from "react";
 
-// const FEATURES = {
-//   dominios: import.meta.env.VITE_FEATURE_DOMINIOS === "1",
-//   pagamentos: import.meta.env.VITE_FEATURE_PAGAMENTOS === "1",
-// };
-
+// usuários (gestão)
+import Register from "./components/Register";          // /usuarios/novo
+import UsuariosList from "./components/UsuariosList";  // /usuarios
+import UsuarioEdit from "./components/UsuarioEdit";    // /usuarios/:id/editar
 
 /* ---------------- Layout ---------------- */
 const Layout: React.FC<{ children: ReactNode }> = ({ children }) => {
   const { user, logout } = useAuth();
   const [open, setOpen] = useState(false);
 
+  // Navegação dinâmica por papel
+  const isAdmin = user?.permissao === "admin";
+  const isAdministrativo = user?.permissao === "administrativo";
+
   const navItems = [
-    { to: "/", label: "Início" },
-    { to: "/blocos", label: "Blocos" },
-    { to: "/clientes", label: "Clientes" },
-    { to: "/formas-pagamento", label: "Parâmetros do pedido" },
-    { to: "/transportadoras", label: "Transportadoras" },
-    // { to: "/dominios", label: "Domínios" },
-    // { to: "/pagamentos", label: "Pagamentos" },
-    { to: "/financeiro/receber", label: "Financeiro" },
-    { to: "/financeiro/conferencia", label: "Conferência" },
-    { to: "/historico-pagamentos", label: "Histórico" },
-  ];
+    { to: "/", label: "Início", show: true },
+    { to: "/blocos", label: "Blocos", show: true },
+    { to: "/clientes", label: "Clientes", show: true },
+    { to: "/transportadoras", label: "Transportadoras", show: true },
+    // Itens que o "administrativo" NÃO pode ver
+    { to: "/formas-pagamento", label: "Parâmetros do pedido", show: !isAdministrativo },
+    { to: "/financeiro/receber", label: "Financeiro", show: !isAdministrativo },
+    { to: "/financeiro/conferencia", label: "Conferência", show: !isAdministrativo },
+    { to: "/historico-pagamentos", label: "Histórico", show: !isAdministrativo },
+    // Usuários — só admin
+    ...(isAdmin ? [{ to: "/usuarios", label: "Usuários", show: true }] : []),
+  ].filter((i) => i.show);
 
   return (
     <div className="min-h-dvh bg-slate-50">
@@ -143,6 +147,7 @@ const Layout: React.FC<{ children: ReactNode }> = ({ children }) => {
                   </NavLink>
                 </li>
               ))}
+
               {/* botão sair visível no mobile dentro do menu */}
               <li className="md:hidden ml-auto">
                 <button
@@ -185,7 +190,6 @@ export default function App() {
       <Routes>
         {/* públicas */}
         <Route path="/login" element={<Login />} />
-        <Route path="/register" element={<Register />} />
 
         {/* protegidas */}
         <Route element={<ProtectedArea />}>
@@ -217,6 +221,32 @@ export default function App() {
           {/* Financeiro */}
           <Route path="/financeiro/receber" element={<FinanceiroReceber />} />
           <Route path="/financeiro/conferencia" element={<Conferencia />} />
+
+          {/* Usuários — somente ADMIN */}
+          <Route
+            path="/usuarios"
+            element={
+              <ProtectedRoute requiredRoles={["admin"]}>
+                <UsuariosList />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/usuarios/novo"
+            element={
+              <ProtectedRoute requiredRoles={["admin"]}>
+                <Register />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/usuarios/:id/editar"
+            element={
+              <ProtectedRoute requiredRoles={["admin"]}>
+                <UsuarioEdit />
+              </ProtectedRoute>
+            }
+          />
         </Route>
 
         {/* 404 */}

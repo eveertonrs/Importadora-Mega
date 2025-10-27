@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useState } from "react";
 import { useNavigate, useParams } from "react-router-dom";
 import {
   getBloco,
@@ -10,6 +10,7 @@ import {
 } from "../../services/blocos.api";
 import type { SaldosResponse } from "../../services/blocos.api";
 import api from "../../services/api";
+import { useAuth } from "../../contexts/AuthContext";
 
 type DetBloco = Awaited<ReturnType<typeof getBloco>>;
 type LancStatus = "PENDENTE" | "LIQUIDADO" | "DEVOLVIDO" | "CANCELADO" | "BAIXADO NO FINANCEIRO";
@@ -59,6 +60,9 @@ export default function BlocoDetalhe() {
   const { id } = useParams();
   const nav = useNavigate();
   const blocoId = Number(id);
+
+  const { user } = useAuth();
+  const canDelete = user?.permissao === "admin"; // ⚠️ apenas admin pode excluir
 
   const [b, setB] = useState<DetBloco | null>(null);
 
@@ -140,7 +144,6 @@ export default function BlocoDetalhe() {
     });
     setLancs(r?.data ?? []);
 
-    // atualiza o saldo do bloco (financeiro e a receber NÃO aparecem mais aqui)
     try {
       const s = await getSaldos(blocoId);
       setSaldos(s);
@@ -150,13 +153,11 @@ export default function BlocoDetalhe() {
   useEffect(() => {
     if (!Number.isFinite(blocoId)) return;
     load();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
   useEffect(() => {
     if (!Number.isFinite(blocoId)) return;
     loadLancs();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lPage, lLimit, fStatus, fTipo]);
 
   // carrega PARÂMETROS ativos
@@ -225,6 +226,10 @@ export default function BlocoDetalhe() {
   }
 
   async function doDel(lancId: number, temBomPara: boolean) {
+    if (!canDelete) {
+      alert("Somente o administrador pode excluir lançamentos.");
+      return;
+    }
     if (!podeEditar) return;
     if (temBomPara) {
       return alert("Este lançamento possui 'bom para' (A Receber). Exclua/ajuste o título correspondente antes.");
@@ -241,7 +246,6 @@ export default function BlocoDetalhe() {
 
   async function doFechar() {
     if (!podeFechar) return;
-    // confirmação usa apenas o SALDO DO BLOCO (o que “viaja”)
     const s = saldos?.saldo_bloco ?? 0;
     if (s > 0) {
       const ok = confirm(
@@ -269,7 +273,7 @@ export default function BlocoDetalhe() {
     }
   }
 
-  /** ==================== CORES MAIS FORTES ==================== **/
+  /** ==================== CORES ==================== **/
   const tone = (n: number) =>
     n < 0
       ? "from-red-200 to-rose-200 text-red-900 ring-1 ring-red-300"
@@ -331,7 +335,7 @@ export default function BlocoDetalhe() {
         ))}
       </div>
 
-      {/* Saldos do BLOCO — agora apenas o saldo do bloco */}
+      {/* Saldos do BLOCO */}
       <div className="grid lg:grid-cols-1 gap-3">
         <div className={`rounded-2xl border bg-gradient-to-r ${tone(saldos?.saldo_bloco ?? 0)} p-4`}>
           <div className="text-xs/5 opacity-80">Saldo do bloco</div>
@@ -533,9 +537,9 @@ export default function BlocoDetalhe() {
                   const baixado = l.status === "BAIXADO NO FINANCEIRO";
 
                   const toneRow = baixado
-                    ? "bg-emerald-100" // baixado no financeiro => verde
+                    ? "bg-emerald-100"
                     : isReceber
-                    ? "bg-amber-100" // A receber
+                    ? "bg-amber-100"
                     : l.sentido === "ENTRADA"
                     ? "bg-red-100"
                     : "bg-emerald-100";
@@ -557,9 +561,15 @@ export default function BlocoDetalhe() {
                       <td className="p-2 border">
                         <button
                           className="px-2 py-1 rounded-lg border text-xs hover:bg-slate-50 disabled:opacity-50"
-                          disabled={!podeEditar || !!l.bom_para}
+                          disabled={!canDelete || !!l.bom_para || !podeEditar}
                           onClick={() => doDel(l.id, !!l.bom_para)}
-                          title={l.bom_para ? "Exclua/ajuste primeiro o título gerado" : "Excluir lançamento"}
+                          title={
+                            !canDelete
+                              ? "Apenas administrador pode excluir"
+                              : l.bom_para
+                              ? "Exclua/ajuste primeiro o título gerado"
+                              : "Excluir lançamento"
+                          }
                         >
                           Excluir
                         </button>

@@ -1,7 +1,7 @@
 import { Request, Response, NextFunction } from "express";
 import jwt, { JwtPayload } from "jsonwebtoken";
 
-export type Permissao = "admin" | "administrador" | "financeiro" | "vendedor";
+export type Permissao = "admin" | "financeiro" | "vendedor" | "administrativo";
 
 export interface AuthenticatedUser {
   id: number;
@@ -60,8 +60,8 @@ export const authorize =
     // Se nenhum papel foi especificado → qualquer usuário autenticado passa
     if (roles.length === 0) return next();
 
-    const userRole = req.user.permissao.toLowerCase();
-    const allowed = roles.map((r) => r.toLowerCase());
+    const userRole = req.user.permissao.toLowerCase() as Permissao;
+    const allowed = roles.map((r) => r.toLowerCase()) as Permissao[];
     if (!allowed.includes(userRole)) {
       return res.status(403).json({ message: "Você não tem permissão para esta ação" });
     }

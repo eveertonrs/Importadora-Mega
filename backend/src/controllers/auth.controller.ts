@@ -5,25 +5,29 @@ import { z } from "zod";
 import { pool } from "../db";
 import type { Permissao, AuthenticatedRequest } from "../middleware/auth.middleware";
 
+/* ======================= Schemas ======================= */
+
 const loginSchema = z.object({
-  email: z.string().email("Email inválido"),
+  email: z.string().min(1, "Email é obrigatório").transform((v) => v.trim().toLowerCase()),
   senha: z.string().min(1, "Senha é obrigatória"),
 });
 
 const registerSchema = z.object({
   nome: z.string().min(1, "Nome é obrigatório"),
-  email: z.string().email("Email inválido"),
+  email: z.string().email("Email inválido").transform((v) => v.trim().toLowerCase()),
   senha: z.string().min(6, "Senha deve ter no mínimo 6 caracteres"),
-  permissao: z.enum(["admin", "financeiro", "vendedor"]).default("vendedor"),
+  permissao: z.enum(["admin", "financeiro", "vendedor", "administrativo"]).default("administrativo"),
 });
+
+/* ======================= Helpers ======================= */
 
 function signToken(payload: { id: number; nome: string; permissao: Permissao }) {
   const secret = process.env.JWT_SECRET as string;
-  if (!secret) {
-    throw new Error("Configuração inválida do servidor (JWT_SECRET)");
-  }
+  if (!secret) throw new Error("Configuração inválida do servidor (JWT_SECRET)");
   return jwt.sign(payload, secret, { expiresIn: "1d" });
 }
+
+/* ======================= Login ======================= */
 
 export const login = async (req: Request, res: Response) => {
   try {
@@ -32,16 +36,14 @@ export const login = async (req: Request, res: Response) => {
     const result = await pool
       .request()
       .input("email", email)
-      .query(
-        "SELECT id, nome, email, senha_hash, permissao FROM usuarios WHERE email = @email AND ativo = 1"
-      );
+      .query("SELECT id, nome, email, senha_hash, permissao FROM usuarios WHERE email = @email AND ativo = 1");
 
     if (result.recordset.length === 0) {
       return res.status(401).json({ message: "Credenciais inválidas" });
     }
 
     const user = result.recordset[0];
-    const ok = await bcrypt.compare(senha, user.senha_hash);
+    const ok = await bcrypt.compare(String(senha), String(user.senha_hash || ""));
     if (!ok) return res.status(401).json({ message: "Credenciais inválidas" });
 
     const permissao = (user.permissao as string).toLowerCase() as Permissao;
@@ -65,14 +67,14 @@ export const login = async (req: Request, res: Response) => {
   }
 };
 
+/* ======================= Register ======================= */
+
 export const register = async (req: Request, res: Response) => {
   try {
     const data = registerSchema.parse(req.body);
-    const email = data.email.toLowerCase();
+    const email = data.email; // já normalizado
 
-    // verifica se já existe
-    const exists = await pool.request().input("email", email)
-      .query("SELECT 1 FROM usuarios WHERE email = @email");
+    const exists = await pool.request().input("email", email).query("SELECT 1 FROM usuarios WHERE email = @email");
     if (exists.recordset.length > 0) {
       return res.status(409).json({ message: "Email já cadastrado" });
     }
@@ -88,7 +90,7 @@ export const register = async (req: Request, res: Response) => {
       .input("permissao", permissao)
       .query(
         `INSERT INTO usuarios (nome, email, senha_hash, permissao, ativo)
-         OUTPUT INSERTED.id, INSERTED.nome, INSERTED.email, INSERTED.permissao
+         OUTPUT INSERTED.id, INSERTED.nome, INSERTED.email, LOWER(INSERTED.permissao) AS permissao
          VALUES (@nome, @email, @senha_hash, @permissao, 1)`
       );
 
@@ -107,6 +109,8 @@ export const register = async (req: Request, res: Response) => {
     res.status(500).json({ message: "Erro interno no servidor" });
   }
 };
+
+/* ======================= Me ======================= */
 
 export const me = async (req: AuthenticatedRequest, res: Response) => {
   if (!req.user) return res.status(401).json({ message: "Acesso não autorizado" });

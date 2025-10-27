@@ -2,11 +2,12 @@
 import type { ReactElement } from "react";
 import { Navigate, useLocation } from "react-router-dom";
 import { useAuth } from "../contexts/AuthContext";
+import type { Permissao } from "../contexts/AuthContext";
 
 type Props = {
   children: ReactElement;
   /** opcional: restringe por permissão do usuário */
-  requiredRoles?: Array<"admin" | "financeiro" | "vendedor">;
+  requiredRoles?: Array<Permissao>;
 };
 
 export default function ProtectedRoute({ children, requiredRoles }: Props) {
@@ -22,7 +23,7 @@ export default function ProtectedRoute({ children, requiredRoles }: Props) {
   }
 
   if (requiredRoles && requiredRoles.length > 0) {
-    const hasRole = requiredRoles.includes(user?.permissao as any);
+    const hasRole = requiredRoles.includes((user?.permissao as Permissao) ?? "vendedor");
     if (!hasRole) {
       return <Navigate to="/" replace />;
     }
