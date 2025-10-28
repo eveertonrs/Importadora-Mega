@@ -14,6 +14,12 @@ export default function UsuarioEdit() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
+  // ---- Senha (opcional)
+  const [senha, setSenha] = useState("");
+  const [senha2, setSenha2] = useState("");
+  const [showPwd, setShowPwd] = useState(false);
+  const [resetting, setResetting] = useState(false);
+
   useEffect(() => {
     (async () => {
       try {
@@ -31,15 +37,30 @@ export default function UsuarioEdit() {
   async function submit(e: React.FormEvent) {
     e.preventDefault();
     if (!form) return;
+
+    // valida apenas se tentar trocar a senha
+    if (senha || senha2) {
+      if (senha.length < 6) {
+        notify("error", "A nova senha deve ter pelo menos 6 caracteres.");
+        return;
+      }
+      if (senha !== senha2) {
+        notify("error", "A confirmação de senha não confere.");
+        return;
+      }
+    }
+
     setSaving(true);
     try {
-      // controller aceita: nome, email, permissao, ativo (+ opcional senha)
-      await api.put(`/usuarios/${userId}`, {
+      const payload: any = {
         nome: form.nome,
-        email: form.email,
+        email: form.email.toLowerCase(),
         permissao: form.permissao,
         ativo: !!form.ativo,
-      });
+      };
+      if (senha) payload.senha = senha; // ← só manda se não estiver em branco
+
+      await api.put(`/usuarios/${userId}`, payload);
       notify("success", "Usuário atualizado.");
       navigate("/usuarios");
     } catch (e: any) {
@@ -47,6 +68,28 @@ export default function UsuarioEdit() {
       notify("error", msg);
     } finally {
       setSaving(false);
+    }
+  }
+
+  // opcional: gerar senha temporária (admin)
+  async function gerarSenhaTemporaria() {
+    setResetting(true);
+    try {
+      const { data } = await api.post(`/usuarios/${userId}/reset-password`, {});
+      const tmp = data?.senha_temporaria as string | undefined;
+      if (tmp) {
+        try { await navigator.clipboard.writeText(tmp); } catch {}
+        setSenha(tmp);
+        setSenha2(tmp);
+        notify("success", "Senha temporária gerada (copiada).");
+      } else {
+        notify("success", "Senha redefinida com sucesso.");
+      }
+    } catch (e: any) {
+      const msg = e?.response?.data?.message || "Falha ao gerar senha temporária";
+      notify("error", msg);
+    } finally {
+      setResetting(false);
     }
   }
 
@@ -82,7 +125,7 @@ export default function UsuarioEdit() {
           </div>
         </div>
 
-        <form className="px-6 py-5 space-y-5" onSubmit={submit}>
+        <form className="px-6 py-5 space-y-6" onSubmit={submit}>
           {/* Nome */}
           <div>
             <label className="block text-sm font-medium text-slate-800">Nome</label>
@@ -116,7 +159,7 @@ export default function UsuarioEdit() {
               >
                 <option value="administrativo">administrativo — acesso a blocos, clientes e transportadoras</option>
                 <option value="admin">admin — acesso total</option>
-                {/* mantenho opções extras comentadas para futuro:
+                {/* futuras:
                 <option value="vendedor">vendedor</option>
                 <option value="financeiro">financeiro</option> */}
               </select>
@@ -135,6 +178,55 @@ export default function UsuarioEdit() {
                 <option value="1">Ativo</option>
                 <option value="0">Inativo</option>
               </select>
+            </div>
+          </div>
+
+          {/* 🔐 Senha (opcional) — mantém todo o resto da tela */}
+          <div className="rounded-xl border border-slate-200 p-4">
+            <div className="grid md:grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-slate-800">
+                  Nova senha <span className="text-slate-400">(opcional)</span>
+                </label>
+                <div className="mt-1 relative">
+                  <input
+                    type={showPwd ? "text" : "password"}
+                    className="w-full rounded-xl border border-slate-300 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-300"
+                    placeholder="Deixe em branco para manter"
+                    value={senha}
+                    onChange={(e) => setSenha(e.target.value)}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPwd((v) => !v)}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-slate-500 hover:text-slate-700"
+                  >
+                    {showPwd ? "Ocultar" : "Mostrar"}
+                  </button>
+                </div>
+                <p className="mt-1 text-xs text-slate-500">Mínimo de 6 caracteres.</p>
+              </div>
+
+              <div>
+                <label className="block text-sm font-medium text-slate-800">Confirmar nova senha</label>
+                <input
+                  type={showPwd ? "text" : "password"}
+                  className="mt-1 w-full rounded-xl border border-slate-300 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-slate-300"
+                  value={senha2}
+                  onChange={(e) => setSenha2(e.target.value)}
+                />
+              </div>
+            </div>
+
+            <div className="mt-3">
+              <button
+                type="button"
+                onClick={gerarSenhaTemporaria}
+                disabled={resetting}
+                className="rounded-xl border border-slate-300 px-4 py-2 text-sm hover:bg-slate-50 disabled:opacity-60"
+              >
+                {resetting ? "Gerando…" : "Gerar senha temporária"}
+              </button>
             </div>
           </div>
 

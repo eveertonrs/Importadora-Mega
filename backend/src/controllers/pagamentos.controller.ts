@@ -377,31 +377,38 @@ export const getSaldo = async (req: Request, res: Response) => {
 
 /** histórico – compatível com HistoricoPagamentos do front */
 export const getHistorico = async (req: Request, res: Response) => {
-  // aceita: GET /pagamentos/historico?cliente_id=123 (se não vier, lista todos)
+  // GET /pagamentos/historico?cliente_id=123
   const { cliente_id } = req.query as { cliente_id?: string };
+
   try {
     const reqDb = pool.request();
+
     let where = "1=1";
     if (cliente_id && cliente_id !== "") {
-      where += " AND b.cliente_id=@cliente_id";
+      // 👇 o filtro é no cliente do BLOCO (alias 'bo'), não do lançamento
+      where += " AND bo.cliente_id = @cliente_id";
       reqDb.input("cliente_id", sql.Int, Number(cliente_id));
     }
 
     const rs = await reqDb.query(`
       SELECT
         bl.id,
-        b.cliente_id,
+        bo.cliente_id,
         bl.valor,
-        bl.tipo_recebimento AS forma_pagamento,
+        bl.tipo_recebimento        AS forma_pagamento,
         bl.criado_em,
-        bl.observacao
-      FROM bloco_lancamentos bl
-      JOIN blocos b ON b.id = bl.bloco_id
+        bl.observacao,
+        bl.criado_por,             -- 👈 devolve o id do usuário
+        u.nome                     AS criado_por_nome  -- 👈 devolve o nome do usuário
+      FROM dbo.bloco_lancamentos bl
+      JOIN dbo.blocos            bo ON bo.id = bl.bloco_id
+      LEFT JOIN dbo.usuarios     u  ON u.id = bl.criado_por
       WHERE ${where}
       ORDER BY bl.criado_em DESC, bl.id DESC
     `);
 
-    res.json(rs.recordset);
+    // seu front aceita array direto ou {data: array}; mantenha simples:
+    res.json({ data: rs.recordset });
   } catch (e) {
     console.error("Erro ao buscar histórico:", e);
     res.status(500).json({ message: "Erro interno no servidor" });

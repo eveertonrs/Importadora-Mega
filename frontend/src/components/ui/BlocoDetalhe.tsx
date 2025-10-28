@@ -231,11 +231,14 @@ export default function BlocoDetalhe() {
       return;
     }
     if (!podeEditar) return;
-    if (temBomPara) {
-      return alert("Este lançamento possui 'bom para' (A Receber). Exclua/ajuste o título correspondente antes.");
-    }
-    const ok = confirm("Excluir este lançamento? Esta ação não pode ser desfeita.");
+
+    const msg = temBomPara
+      ? "Este lançamento possui 'bom para'. O título gerado no Financeiro (A Receber) será EXCLUÍDO junto, desde que não tenha baixas. Deseja continuar?"
+      : "Excluir este lançamento? Esta ação não pode ser desfeita.";
+
+    const ok = confirm(msg);
     if (!ok) return;
+
     try {
       await excluirLancamento(blocoId, lancId);
       await loadLancs();
@@ -243,6 +246,7 @@ export default function BlocoDetalhe() {
       alert(e?.response?.data?.message || "Falha ao excluir lançamento.");
     }
   }
+
 
   async function doFechar() {
     if (!podeFechar) return;
@@ -561,13 +565,13 @@ export default function BlocoDetalhe() {
                       <td className="p-2 border">
                         <button
                           className="px-2 py-1 rounded-lg border text-xs hover:bg-slate-50 disabled:opacity-50"
-                          disabled={!canDelete || !!l.bom_para || !podeEditar}
+                          disabled={!canDelete || !podeEditar}
                           onClick={() => doDel(l.id, !!l.bom_para)}
                           title={
                             !canDelete
                               ? "Apenas administrador pode excluir"
                               : l.bom_para
-                              ? "Exclua/ajuste primeiro o título gerado"
+                              ? "Excluir lançamento e também o título gerado (se não houver baixas)"
                               : "Excluir lançamento"
                           }
                         >

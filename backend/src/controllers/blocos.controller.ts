@@ -744,42 +744,119 @@ export const deleteLancamento = async (req: Request, res: Response) => {
   }
 
   try {
+    // Bloco precisa estar ABERTO
     const blocoRS = await pool.request().input("id", sql.Int, bloco_id)
-      .query(`SELECT id, status FROM blocos WHERE id = @id`);
+      .query(`SELECT id, status FROM dbo.blocos WHERE id=@id`);
     if (!blocoRS.recordset.length) return res.status(404).json({ message: "Bloco não encontrado" });
     if (String(blocoRS.recordset[0].status) !== "ABERTO") {
       return res.status(400).json({ message: "Não é possível excluir lançamento de bloco FECHADO" });
     }
 
+    // Lançamento
     const lancRS = await pool.request()
       .input("id", sql.Int, lanc_id)
       .input("bloco_id", sql.Int, bloco_id)
-      .query(
-        `SELECT id, bloco_id, bom_para
-         FROM bloco_lancamentos
-         WHERE id = @id AND bloco_id = @bloco_id`
-      );
+      .query(`
+        SELECT id, bloco_id, bom_para, tipo_recebimento, valor
+        FROM dbo.bloco_lancamentos
+        WHERE id=@id AND bloco_id=@bloco_id
+      `);
     if (!lancRS.recordset.length) return res.status(404).json({ message: "Lançamento não encontrado" });
 
-    const bom_para = lancRS.recordset[0].bom_para as Date | null;
-    if (bom_para) {
-      return res.status(409).json({
-        message:
-          "Este lançamento possui 'bom para' (gera/gerou Título a receber). Exclua/ajuste o título correspondente antes de remover o lançamento."
-      });
+    const lanc = lancRS.recordset[0] as {
+      id: number; bloco_id: number; bom_para: Date | null;
+      tipo_recebimento: string; valor: number;
+    };
+
+    const tx = new sql.Transaction(pool);
+    await tx.begin();
+
+    try {
+      if (lanc.bom_para) {
+        // 1) tentar casar pelo bloco_lanc_id (schema novo)
+        let titulos: Array<{ id:number; status:string; valor_baixado:number }> = [];
+        try {
+          const byLink = await new sql.Request(tx)
+            .input("lanc_id", sql.Int, lanc.id)
+            .query(`
+              SELECT id, status, valor_baixado
+              FROM dbo.financeiro_titulos
+              WHERE bloco_lanc_id=@lanc_id
+            `);
+          titulos = byLink.recordset as any[];
+        } catch (err: any) {
+          // se a coluna não existir, ignora e usa heurística
+          const n = err?.number ?? err?.originalError?.number;
+          const msg = String(err?.message || "");
+          const invalidColumn = n === 207 || /Invalid column name/i.test(msg);
+          if (!invalidColumn) throw err;
+        }
+
+        // 2) fallback heurístico (schema antigo)
+        if (titulos.length === 0) {
+          const byHeuristic = await new sql.Request(tx)
+            .input("bloco_id", sql.Int, lanc.bloco_id)
+            .input("tipo", sql.VarChar(30), String(lanc.tipo_recebimento || "").toUpperCase())
+            .input("valor", sql.Decimal(18, 2), Number(lanc.valor || 0))
+            .input("bom_para", sql.Date, lanc.bom_para ? new Date(lanc.bom_para) : null)
+            .query(`
+              SELECT id, status, valor_baixado
+              FROM dbo.financeiro_titulos
+              WHERE bloco_id = @bloco_id
+                AND UPPER(tipo) = @tipo
+                AND ABS(valor_bruto - @valor) < 0.01
+                AND (
+                      (@bom_para IS NULL AND bom_para IS NULL)
+                   OR ( @bom_para IS NOT NULL AND bom_para IS NOT NULL
+                        AND CAST(bom_para AS date) = CAST(@bom_para AS date) )
+                )
+            `);
+          titulos = byHeuristic.recordset as any[];
+        }
+
+        // 3) se houver título, bloquear se já tiver baixa
+        if (titulos.length) {
+          const temBaixa = titulos.some(
+            (t) => String(t.status).toUpperCase() === "BAIXADO" || Number(t.valor_baixado || 0) > 0
+          );
+          if (temBaixa) {
+            await tx.rollback();
+            return res.status(409).json({
+              message:
+                "Não é possível excluir: o título vinculado já possui baixa. Estorne/exclua as baixas no Financeiro antes."
+            });
+          }
+
+          // 4) excluir os títulos
+          const reqDel = new sql.Request(tx);
+          const placeholders: string[] = [];
+          titulos.forEach((t, i) => {
+            reqDel.input(`tid${i}`, sql.Int, Number(t.id));
+            placeholders.push(`@tid${i}`);
+          });
+          await reqDel.query(`DELETE FROM dbo.financeiro_titulos WHERE id IN (${placeholders.join(",")})`);
+        }
+      }
+
+      // 5) excluir o lançamento
+      await new sql.Request(tx)
+        .input("id", sql.Int, lanc.id)
+        .input("bloco_id", sql.Int, lanc.bloco_id)
+        .query(`DELETE FROM dbo.bloco_lancamentos WHERE id=@id AND bloco_id=@bloco_id`);
+
+      await tx.commit();
+      return res.status(204).send();
+    } catch (err) {
+      try { await tx.rollback(); } catch {}
+      throw err;
     }
-
-    await pool.request()
-      .input("id", sql.Int, lanc_id)
-      .input("bloco_id", sql.Int, bloco_id)
-      .query(`DELETE FROM bloco_lancamentos WHERE id = @id AND bloco_id = @bloco_id`);
-
-    return res.status(204).send();
   } catch (err) {
-    console.error("Erro em deleteLancamento:", err);
+    console.error("Erro em deleteLancamento (c/ cascade):", err);
     return res.status(500).json({ message: "Erro interno no servidor" });
   }
 };
+
+
 
 export const listPedidosDoBloco = async (_req: Request, res: Response) => {
   return res.status(501).json({ message: "Não alterado aqui. Mantenha seu handler original." });
