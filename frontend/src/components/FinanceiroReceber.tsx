@@ -18,7 +18,7 @@ function daysToDue(date?: string | null): number {
   const today = new Date();
   d.setHours(0, 0, 0, 0);
   today.setHours(0, 0, 0, 0);
-  return Math.round((d.getTime() - today.getTime()) / 86400000); // <-- divide antes, depois arredonda
+  return Math.round((d.getTime() - today.getTime()) / 86400000);
 }
 
 function dueBadge(date?: string | null) {
@@ -54,7 +54,7 @@ export default function FinanceiroReceber() {
   const [loading, setLoading] = useState(false);
 
   // FILTROS (servidor)
-  const [status, setStatus] = useState<"ABERTO" | "PARCIAL" | "BAIXADO" | "all" | "ABERTO,PARCIAL">("ABERTO,PARCIAL");
+  const [status, setStatus] = useState<"ABERTO" | "PARCIAL" | "BAIXADO" | "all" | "ABERTO,PARCIAL">("all");
   const [from, setFrom] = useState<string>("");
   const [to, setTo] = useState<string>("");
   const [q, setQ] = useState("");
@@ -216,11 +216,9 @@ export default function FinanceiroReceber() {
           {/* STATUS (servidor) */}
           <div className="flex items-center gap-1">
             {[
-              // { v: "ABERTO,PARCIAL", label: "Abertos + Parciais" },
-              { v: "ABERTO", label: "Abertos" },
-              // { v: "PARCIAL", label: "Apenas parciais" },
-              { v: "BAIXADO", label: "Baixados" },
               { v: "all", label: "Todos" },
+              { v: "ABERTO", label: "Abertos" },
+              { v: "BAIXADO", label: "Baixados" },
             ].map((s) => (
               <button
                 key={s.v}
@@ -231,6 +229,7 @@ export default function FinanceiroReceber() {
                     ? "bg-slate-900 text-white ring-slate-900"
                     : "bg-white text-slate-700 ring-slate-200 hover:bg-slate-50",
                 ].join(" ")}
+                aria-pressed={status === (s.v as any)}
               >
                 {s.label}
               </button>
@@ -303,6 +302,7 @@ export default function FinanceiroReceber() {
                     ? "bg-slate-900 text-white ring-slate-900"
                     : "bg-white text-slate-700 ring-slate-200 hover:bg-slate-50",
                 ].join(" ")}
+                aria-pressed={prazo === p.v}
               >
                 {p.label}
               </button>
@@ -327,6 +327,7 @@ export default function FinanceiroReceber() {
                     ? "bg-slate-900 text-white ring-slate-900"
                     : "bg-white text-slate-700 ring-slate-200 hover:bg-slate-50",
                 ].join(" ")}
+                aria-pressed={tipo === p.v}
               >
                 {p.label}
               </button>
@@ -365,93 +366,93 @@ export default function FinanceiroReceber() {
             </tr>
           </thead>
 
-        <tbody className="[&>tr:nth-child(even)]:bg-slate-50/40">
-          {loading && (
-            <tr><td colSpan={8} className="p-6 text-center">Carregando…</td></tr>
-          )}
+          <tbody className="[&>tr:nth-child(even)]:bg-slate-50/40">
+            {loading && (
+              <tr><td colSpan={8} className="p-6 text-center">Carregando…</td></tr>
+            )}
 
-          {!loading && viewItems.length === 0 && (
-            <tr><td colSpan={8} className="p-8 text-center text-slate-500">Sem títulos</td></tr>
-          )}
+            {!loading && viewItems.length === 0 && (
+              <tr><td colSpan={8} className="p-8 text-center text-slate-500">Sem títulos</td></tr>
+            )}
 
-          {!loading && viewItems.map((t) => {
-            const pendente = Math.max(0, t.valor_bruto - t.valor_baixado);
-            const name = getClientName(t.cliente_id as any, (t as any).cliente_nome);
-            return (
-              <tr key={t.id} className="hover:bg-slate-50">
-                <td className="p-2 border">
-                  <div className="flex items-center gap-2 min-w-0">
-                    <div className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-slate-100 text-xs font-medium text-slate-700">
-                      {initials(name)}
+            {!loading && viewItems.map((t) => {
+              const pendente = Math.max(0, t.valor_bruto - t.valor_baixado);
+              const name = getClientName(t.cliente_id as any, (t as any).cliente_nome);
+              return (
+                <tr key={t.id} className="hover:bg-slate-50">
+                  <td className="p-2 border">
+                    <div className="flex items-center gap-2 min-w-0">
+                      <div className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-slate-100 text-xs font-medium text-slate-700">
+                        {initials(name)}
+                      </div>
+                      <div className="truncate" title={name}>
+                        <div className="truncate font-medium">{name}</div>
+                      </div>
                     </div>
-                    <div className="truncate" title={name}>
-                      <div className="truncate font-medium">{name}</div>
+                  </td>
+
+                  <td className="p-2 border">
+                    <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-700">
+                      {t.tipo === "BOLETO" ? "🧾" : t.tipo === "CHEQUE" ? "💳" : "📄"} {t.tipo}
+                    </span>
+                  </td>
+
+                  <td className="p-2 border">{t.numero_doc || "—"}</td>
+
+                  <td className="p-2 border">
+                    <div className="flex items-center gap-2">
+                      <span>{t.bom_para ? new Date(t.bom_para).toLocaleDateString() : "—"}</span>
+                      {dueBadge(t.bom_para)}
                     </div>
-                  </div>
+                  </td>
+
+                  <td className="p-2 border text-right whitespace-nowrap">{money(t.valor_bruto)}</td>
+                  <td className="p-2 border text-right whitespace-nowrap">{money(t.valor_baixado)}</td>
+
+                  <td className="p-2 border"><StatusBadge value={t.status} /></td>
+
+                  <td className="p-2 border">
+                    {t.status === "BAIXADO" ? (
+                      <button
+                        className="w-full rounded-md border border-rose-600 bg-rose-600 px-2 py-1 text-xs text-white hover:bg-rose-700 focus:outline-none focus:ring-2 focus:ring-rose-400/50 transition-colors"
+                        onClick={() => handleEstornar(t.id)}
+                      >
+                        Estornar
+                      </button>
+                    ) : pendente > 0 ? (
+                      <button
+                        className="w-full rounded-md border border-emerald-600 bg-emerald-600 px-2 py-1 text-xs text-white hover:bg-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-400/50 transition-colors"
+                        onClick={() => {
+                          setTituloSel({ id: t.id, pendente });
+                          setShowBaixa(true);
+                        }}
+                      >
+                        Baixar
+                      </button>
+                    ) : (
+                      <span className="text-slate-400 text-xs">—</span>
+                    )}
+                  </td>
+
+                </tr>
+              );
+            })}
+          </tbody>
+
+          {!loading && viewItems.length > 0 && (
+            <tfoot>
+              <tr className="bg-slate-100/60">
+                <td className="p-2 border font-medium text-right" colSpan={4}>Totais (lista exibida):</td>
+                <td className="p-2 border font-semibold text-right">
+                  {money(viewItems.reduce((a, t) => a + t.valor_bruto, 0))}
                 </td>
-
-                <td className="p-2 border">
-                  <span className="inline-flex items-center gap-1 rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-700">
-                    {t.tipo === "BOLETO" ? "🧾" : t.tipo === "CHEQUE" ? "💳" : "📄"} {t.tipo}
-                  </span>
+                <td className="p-2 border font-semibold text-right">
+                  {money(viewItems.reduce((a, t) => a + t.valor_baixado, 0))}
                 </td>
-
-                <td className="p-2 border">{t.numero_doc || "—"}</td>
-
-                <td className="p-2 border">
-                  <div className="flex items-center gap-2">
-                    <span>{t.bom_para ? new Date(t.bom_para).toLocaleDateString() : "—"}</span>
-                    {dueBadge(t.bom_para)}
-                  </div>
-                </td>
-
-                <td className="p-2 border text-right whitespace-nowrap">{money(t.valor_bruto)}</td>
-                <td className="p-2 border text-right whitespace-nowrap">{money(t.valor_baixado)}</td>
-
-                <td className="p-2 border"><StatusBadge value={t.status} /></td>
-
-                <td className="p-2 border">
-                  {t.status === "BAIXADO" ? (
-                    <button
-                      className="w-full rounded-md border border-rose-600 bg-rose-600 px-2 py-1 text-xs text-white hover:bg-rose-700 focus:outline-none focus:ring-2 focus:ring-rose-400/50 transition-colors"
-                      onClick={() => handleEstornar(t.id)}
-                    >
-                      Estornar
-                    </button>
-                  ) : pendente > 0 ? (
-                    <button
-                      className="w-full rounded-md border border-emerald-600 bg-emerald-600 px-2 py-1 text-xs text-white hover:bg-emerald-700 focus:outline-none focus:ring-2 focus:ring-emerald-400/50 transition-colors"
-                      onClick={() => {
-                        setTituloSel({ id: t.id, pendente });
-                        setShowBaixa(true);
-                      }}
-                    >
-                      Baixar
-                    </button>
-                  ) : (
-                    <span className="text-slate-400 text-xs">—</span>
-                  )}
-                </td>
-
+                <td className="p-2 border" colSpan={2}></td>
               </tr>
-            );
-          })}
-        </tbody>
-
-        {!loading && viewItems.length > 0 && (
-          <tfoot>
-            <tr className="bg-slate-100/60">
-              <td className="p-2 border font-medium text-right" colSpan={4}>Totais (lista exibida):</td>
-              <td className="p-2 border font-semibold text-right">
-                {money(viewItems.reduce((a, t) => a + t.valor_bruto, 0))}
-              </td>
-              <td className="p-2 border font-semibold text-right">
-                {money(viewItems.reduce((a, t) => a + t.valor_baixado, 0))}
-              </td>
-              <td className="p-2 border" colSpan={2}></td>
-            </tr>
-          </tfoot>
-        )}
+            </tfoot>
+          )}
         </table>
       </div>
 

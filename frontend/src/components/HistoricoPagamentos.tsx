@@ -40,6 +40,10 @@ type RowAPI = {
   observacao?: string | null;
   cliente_nome?: string | null;
 
+  // 🔽 mesmos campos usados no BlocoDetalhe
+  criado_por?: number | null;
+  criado_por_nome?: string | null;
+
   // às vezes o backend já manda o sentido:
   tipo?: string | null;            // "ENTRADA" | "SAIDA"
   natureza?: string | null;        // "ENTRADA" | "SAIDA" | "E" | "S"
@@ -231,7 +235,9 @@ export default function HistoricoPagamentos() {
       if (cid !== "" && Number(r.cliente_id) !== Number(cid)) return false;
       if (tipo !== "ALL" && r.direcao !== tipo) return false;
       if (qq) {
-        const hay = ((r.observacao || "") + " " + (r.forma_pagamento || "")).toLowerCase();
+        const hay = (
+          ((r.observacao || "") + " " + (r.forma_pagamento || "") + " " + (r.criado_por_nome || "") + " " + String(r.criado_por ?? ""))
+        ).toLowerCase();
         if (!hay.includes(qq)) return false;
       }
       return true;
@@ -325,12 +331,13 @@ export default function HistoricoPagamentos() {
 
   // exporta o que está na tela (filtrado) — mantém o sinal do sistema
   function exportCsv() {
-    const header = ["cliente", "direcao", "valor", "forma", "data", "observacao"];
+    const header = ["cliente", "direcao", "valor", "forma", "por", "data", "observacao"];
     const lines = rows.map((r) => [
       getClientName(r.cliente_id, r.cliente_nome),
       r.direcao,
       String(r.valor_assinado).replace(".", ","), // ENTRADA negativa, SAÍDA positiva
       r.forma_pagamento,
+      (r.criado_por_nome?.trim() || (r.criado_por ? `#${r.criado_por}` : "")),
       dtBR(r.criado_em),
       (r.observacao ?? "").replaceAll('"', '""'),
     ]);
@@ -420,7 +427,7 @@ export default function HistoricoPagamentos() {
               <IconSearch className="pointer-events-none absolute left-2 top-1/2 -translate-y-1/2 text-slate-400" />
               <input
                 className="mt-1 w-full rounded-xl border px-8 py-2"
-                placeholder="observação, forma…"
+                placeholder="observação, forma, usuário…"
                 value={q}
                 onChange={(e) => { setQ(e.target.value); }}
                 onKeyDown={(e) => { if (e.key === "Enter") applyFilters(); }}
@@ -533,6 +540,7 @@ export default function HistoricoPagamentos() {
               <th className="border p-2">Direção</th>
               <th className="border p-2">Valor</th>
               <th className="border p-2">Forma</th>
+              <th className="border p-2">Por</th> {/* 👈 novo */}
               <th className="border p-2">Data</th>
               <th className="border p-2">Obs</th>
             </tr>
@@ -541,7 +549,7 @@ export default function HistoricoPagamentos() {
             {loading &&
               Array.from({ length: 6 }).map((_, i) => (
                 <tr key={`sk-${i}`} className="animate-pulse">
-                  {Array.from({ length: 6 }).map((__, j) => (
+                  {Array.from({ length: 7 }).map((__, j) => (
                     <td key={j} className="border p-2"><div className="h-4 w-full max-w-[180px] rounded bg-slate-100" /></td>
                   ))}
                 </tr>
@@ -552,6 +560,7 @@ export default function HistoricoPagamentos() {
                 const nome = getClientName(r.cliente_id, r.cliente_nome);
                 const isSaida = r.direcao === "SAIDA";
                 const sign = isSaida ? "+" : "−";
+                const autor = r.criado_por_nome?.trim() || (r.criado_por ? `#${r.criado_por}` : "—");
                 return (
                   <tr key={r.id} className="hover:bg-slate-50">
                     <td className="border p-2">
@@ -569,6 +578,7 @@ export default function HistoricoPagamentos() {
                       {sign} {money(Math.abs(r.valor_assinado))}
                     </td>
                     <td className="border p-2"><Badge tone={formaTone(r.forma_pagamento)}>{r.forma_pagamento}</Badge></td>
+                    <td className="border p-2 whitespace-nowrap">{autor}</td> {/* 👈 novo */}
                     <td className="border p-2 whitespace-nowrap">{dtBR(r.criado_em)}</td>
                     <td className="border p-2">
                       {r.observacao ? <span className="line-clamp-2" title={r.observacao ?? ""}>{r.observacao}</span> : <span className="text-slate-400">—</span>}
@@ -578,7 +588,7 @@ export default function HistoricoPagamentos() {
               })}
 
             {!loading && rows.length === 0 && (
-              <tr><td colSpan={6} className="p-10 text-center text-slate-500">Nenhum lançamento encontrado.</td></tr>
+              <tr><td colSpan={7} className="p-10 text-center text-slate-500">Nenhum lançamento encontrado.</td></tr>
             )}
           </tbody>
 
@@ -591,7 +601,7 @@ export default function HistoricoPagamentos() {
                 <td className={`border p-2 font-semibold ${saldo >= 0 ? "text-emerald-700" : "text-rose-700"}`}>
                   {saldo >= 0 ? "+" : "−"} {money(Math.abs(saldo))}
                 </td>
-                <td className="border p-2" colSpan={3}></td>
+                <td className="border p-2" colSpan={4}></td> {/* ajustado por nova coluna */}
               </tr>
             </tfoot>
           )}

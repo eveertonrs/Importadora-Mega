@@ -3,6 +3,9 @@ import { Link, useNavigate } from "react-router-dom";
 import { useEffect, useMemo, useState, useCallback } from "react";
 import api from "../services/api";
 
+// 👉 se você tiver esse hook, mantenha; se não, pode apagar a linha sem problemas
+import { /* useAuth */ } from "../contexts/AuthContext";
+
 import Button from "./ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "./ui/card";
 import Badge from "./ui/badge";
@@ -17,7 +20,6 @@ type BlocoItem = {
 };
 
 type SaldosBloco = {
-  // possíveis aliases retornados pelo backend
   saldo_bloco?: number;
   saldo?: number;
   saldo_total?: number;
@@ -67,7 +69,7 @@ function pickNumber(o: any, ...aliases: string[]) {
   return 0;
 }
 
-/** ======================= pequenos componentes ======================= */
+/** ======================= UI base ======================= */
 
 function SkeletonBox({ className = "" }: { className?: string }) {
   return <div className={`animate-pulse rounded-md bg-slate-200/70 ${className}`} />;
@@ -84,7 +86,6 @@ function MetricCard(props: {
   tooltip?: string;
 }) {
   const { title, value, linkTo, linkText = "ver", icon, loading, tooltip, ...a11y } = props;
-
   return (
     <Card aria-busy={loading} className="overflow-hidden">
       <CardHeader className="pb-2">
@@ -93,9 +94,7 @@ function MetricCard(props: {
           <span title={tooltip}>{title}</span>
         </CardTitle>
       </CardHeader>
-
       <CardContent className="flex items-end justify-between pb-5">
-        {/* altura maior + alinhamento pelo baseline para evitar “corte” */}
         <div className="min-h-[56px] sm:min-h-[64px] flex items-end overflow-visible" {...a11y}>
           {loading ? (
             <div className="w-32">
@@ -107,7 +106,6 @@ function MetricCard(props: {
             </div>
           )}
         </div>
-
         {linkTo && (
           <Link to={linkTo} className="text-blue-600 hover:underline text-sm">
             {linkText}
@@ -118,24 +116,9 @@ function MetricCard(props: {
   );
 }
 
-function Shortcut({ to, label, icon }: { to: string; label: string; icon: React.ReactNode }) {
-  const navigate = useNavigate();
-  return (
-    <Button
-      variant="ghost"
-      onClick={() => navigate(to)}
-      className="flex items-center gap-2 px-3"
-      title={label}
-    >
-      <span aria-hidden>{icon}</span>
-      {label}
-    </Button>
-  );
-}
 
 /** ======== Charts ======== */
 
-// Barras verticais (top 5 por exposição)
 function BarsChart({
   data,
   width = 420,
@@ -146,11 +129,9 @@ function BarsChart({
   height?: number;
 }) {
   if (!data.length) return null;
-
   const maxAbs = Math.max(1, ...data.map((v) => Math.abs(v)));
   const midY = height / 2;
   const barW = Math.max(6, Math.floor((width - 24) / data.length) - 8);
-
   return (
     <svg width={width} height={height} className="block">
       <line x1="0" y1={midY} x2={width} y2={midY} stroke="#e2e8f0" />
@@ -166,15 +147,14 @@ function BarsChart({
   );
 }
 
-// Donut simples (mostra a composição do total financeiro)
 function DonutChart({
   a,
   b,
   size = 180,
   labels = ["Débito blocos", "A receber"],
 }: {
-  a: number; // débito positivo
-  b: number; // a receber
+  a: number;
+  b: number;
   size?: number;
   labels?: [string, string] | string[];
 }) {
@@ -185,38 +165,18 @@ function DonutChart({
   const circumference = 2 * Math.PI * radius;
   const aLen = total ? (Math.max(0, a) / total) * circumference : 0;
   const bLen = total ? (Math.max(0, b) / total) * circumference : 0;
-
   return (
     <div className="flex flex-col md:flex-row md:items-center gap-4">
       <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`}>
         <circle cx={r} cy={r} r={radius} stroke="#e2e8f0" strokeWidth={stroke} fill="none" />
-        {/* A (Débito) */}
-        <circle
-          cx={r}
-          cy={r}
-          r={radius}
-          stroke="#ef4444"
-          strokeWidth={stroke}
-          fill="none"
-          strokeDasharray={`${aLen} ${circumference - aLen}`}
-          strokeDashoffset={circumference * 0.25}
-        />
-        {/* B (A receber) */}
-        <circle
-          cx={r}
-          cy={r}
-          r={radius}
-          stroke="#f59e0b"
-          strokeWidth={stroke}
-          fill="none"
-          strokeDasharray={`${bLen} ${circumference - bLen}`}
-          strokeDashoffset={circumference * 0.25 - aLen}
-        />
+        <circle cx={r} cy={r} r={radius} stroke="#ef4444" strokeWidth={stroke} fill="none"
+          strokeDasharray={`${aLen} ${circumference - aLen}`} strokeDashoffset={circumference * 0.25}/>
+        <circle cx={r} cy={r} r={radius} stroke="#f59e0b" strokeWidth={stroke} fill="none"
+          strokeDasharray={`${bLen} ${circumference - bLen}`} strokeDashoffset={circumference * 0.25 - aLen}/>
         <text x="50%" y="50%" dominantBaseline="central" textAnchor="middle" fontSize="14" fill="#334155">
           {currency(total)}
         </text>
       </svg>
-
       <div className="space-y-2 text-sm">
         <div className="flex items-center gap-2">
           <span className="inline-block h-3 w-3 rounded-sm" style={{ background: "#ef4444" }} />
@@ -241,16 +201,33 @@ function DonutChart({
 export default function Home() {
   const navigate = useNavigate();
 
+  // ===== papel do usuário (admin x administrativo)
+  // Se você já tiver um hook, descomente e use:
+  // const { user } = useAuth();
+  const role: string | undefined = useMemo(() => {
+    try {
+      // tenta diferentes formatos comuns no localStorage
+      const keys = ["auth_user", "auth", "user", "megafin:auth"];
+      for (const k of keys) {
+        const raw = localStorage.getItem(k);
+        if (!raw) continue;
+        const obj = JSON.parse(raw);
+        if (obj?.user?.permissao) return String(obj.user.permissao);
+        if (obj?.permissao) return String(obj.permissao);
+      }
+    } catch {}
+    return undefined;
+  }, []);
+  const isAdmin = role === "admin";
+
   const [clientesTotal, setClientesTotal] = useState<number>(0);
   const [blocosAbertosTotal, setBlocosAbertosTotal] = useState<number>(0);
 
-  // totais (TODOS os blocos ABERTOS)
   const [saldoBlocoTotal, setSaldoBlocoTotal] = useState<number>(0);
   const [debitoBlocoTotal, setDebitoBlocoTotal] = useState<number>(0); // |saldo negativo|
-  const [financeiroTotal, setFinanceiroTotal] = useState<number>(0); // **DEBITO + A_RECEBER**
+  const [financeiroTotal, setFinanceiroTotal] = useState<number>(0);   // débito + a receber
   const [aReceberTotal, setAReceberTotal] = useState<number>(0);
 
-  // UI
   const [blocosRecentes, setBlocosRecentes] = useState<BlocoItem[]>([]);
   const [bars, setBars] = useState<number[]>([]);
 
@@ -263,13 +240,11 @@ export default function Home() {
     let page = 1;
     let total = 0;
     const all: any[] = [];
-
     const first = await api.get("/blocos", {
       params: { status: "ABERTO", page, limit, sortBy: "aberto_em", sortDir: "DESC" },
     });
     total = extractTotal(first);
     all.push(...(first.data?.data ?? first.data ?? []));
-
     const pages = Math.ceil(total / limit);
     while (page < pages) {
       page += 1;
@@ -279,7 +254,6 @@ export default function Home() {
       });
       all.push(...(r.data?.data ?? r.data ?? []));
     }
-
     const recentes = (all.slice(0, 5) as any[]).map((b) => ({
       id: b.id,
       codigo: b.codigo,
@@ -288,7 +262,6 @@ export default function Home() {
       aberto_em: formatDateTime(b.aberto_em),
     })) as BlocoItem[];
     setBlocosRecentes(recentes);
-
     setBlocosAbertosTotal(total || all.length);
     return all;
   }
@@ -299,27 +272,15 @@ export default function Home() {
     const saldosResp = await Promise.allSettled(
       blocosAbertos.map((b: any) => api.get(`/blocos/${b.id}/saldos`, { headers: { "x-silent": "1" } }))
     );
-
     const rows: Row[] = [];
-
     saldosResp.forEach((r, i) => {
       if (r.status !== "fulfilled") return;
       const raw = (r.value?.data ?? {}) as SaldosBloco;
-
       const saldoBloco = pickNumber(raw, "saldo_bloco", "saldoDoBloco", "saldo_total", "saldo");
       const aReceberBloco = pickNumber(raw, "a_receber", "aReceber", "em_aberto", "emAberto");
-
-      // “exposição” por bloco, usada no gráfico Top 5
       const exposicao = Math.max(0, -saldoBloco) + aReceberBloco;
-
-      rows.push({
-        blocoId: blocosAbertos[i].id,
-        saldoBloco,
-        aReceber: aReceberBloco,
-        exposicao,
-      });
+      rows.push({ blocoId: blocosAbertos[i].id, saldoBloco, aReceber: aReceberBloco, exposicao });
     });
-
     return rows;
   }
 
@@ -331,59 +292,34 @@ export default function Home() {
       });
       const v = pickNumber(r.data, "a_receber", "aReceber", "total", "valor", "valor_total") || 0;
       if (v > 0) return v;
-    } catch {
-      /* ignore */
-    }
-
-    // fallback por paginação (se não existir /resumo)
+    } catch {}
+    // fallbacks por paginação (se não existir /resumo)
     async function sumFrom(path: string): Promise<number> {
       const limit = 100;
       let page = 1;
-      let total = 0;
       let soma = 0;
-
       const sumPage = (resp: any) => {
         const rows = resp?.data?.data ?? resp?.data ?? [];
         for (const it of rows) {
           const pronto = pickNumber(it, "em_aberto", "emAberto", "a_receber", "aReceber");
-          if (pronto) {
-            soma += pronto;
-            continue;
-          }
+          if (pronto) { soma += pronto; continue; }
           const bruto = pickNumber(it, "valor_bruto", "valorBruto", "valor");
           const baixado = pickNumber(it, "valor_baixado", "valorBaixado", "baixado");
           soma += Math.max(0, bruto - baixado);
         }
       };
-
-      const first = await api.get(path, {
-        params: { page, limit, status: "ABERTO,PARCIAL" },
-        headers: { "x-silent": "1" },
-      });
-      total = extractTotal(first);
+      const first = await api.get(path, { params: { page, limit, status: "ABERTO,PARCIAL" }, headers: { "x-silent": "1" } });
+      const total = extractTotal(first);
       sumPage(first);
-
       const pages = Math.ceil(total / limit);
-      while (page < pages) {
-        page += 1;
-        const resp = await api.get(path, {
-          params: { page, limit, status: "ABERTO,PARCIAL" },
-          headers: { "x-silent": "1" },
-        });
+      for (let p = 2; p <= pages; p++) {
+        const resp = await api.get(path, { params: { page: p, limit, status: "ABERTO,PARCIAL" }, headers: { "x-silent": "1" } });
         sumPage(resp);
       }
       return soma;
     }
-
-    try {
-      const v = await sumFrom("/financeiro/receber");
-      if (v > 0) return v;
-    } catch {}
-    try {
-      const v = await sumFrom("/financeiro/titulos");
-      if (v > 0) return v;
-    } catch {}
-
+    try { const v = await sumFrom("/financeiro/receber"); if (v > 0) return v; } catch {}
+    try { const v = await sumFrom("/financeiro/titulos"); if (v > 0) return v; } catch {}
     return 0;
   }
 
@@ -391,34 +327,25 @@ export default function Home() {
     setLoading(true);
     setErr(null);
     try {
-      // 1) total de clientes
       const respClientes = await api.get("/clientes", { params: { page: 1, limit: 1 } });
       setClientesTotal(extractTotal(respClientes));
 
-      // 2) blocos abertos (todos)
       const blocosAbertos = await fetchAllBlocosAbertos(50);
-
-      // 3) saldos por bloco + total a receber (global)
-      const [rows, totalARec] = await Promise.all([fetchFinanceiroRows(blocosAbertos), fetchAReceberTotal()]);
+      const [rows, totalARec] = await Promise.all([
+        fetchFinanceiroRows(blocosAbertos),
+        fetchAReceberTotal(),
+      ]);
       setAReceberTotal(totalARec);
 
-      // totais de blocos
       const totalSaldoBloco = rows.reduce((sum, r) => sum + r.saldoBloco, 0);
       const totalDebito = rows.reduce((sum, r) => sum + Math.max(0, -r.saldoBloco), 0);
 
       setSaldoBlocoTotal(totalSaldoBloco);
       setDebitoBlocoTotal(totalDebito);
-
-      // *** REGRA SOLICITADA ***
-      // Financeiro (abertos) = Débito dos blocos (positivo) + A receber (abertos)
       setFinanceiroTotal(totalDebito + totalARec);
 
-      // Top 5 por exposição (usa cálculo por bloco)
-      const top5 = rows
-        .slice()
-        .sort((a, b) => Math.abs(b.exposicao) - Math.abs(a.exposicao))
-        .slice(0, 5)
-        .map((r) => r.exposicao);
+      const top5 = rows.slice().sort((a, b) => Math.abs(b.exposicao) - Math.abs(a.exposicao))
+        .slice(0, 5).map((r) => r.exposicao);
       setBars(top5);
     } catch (e: any) {
       console.error("Erro no dashboard:", e);
@@ -429,9 +356,7 @@ export default function Home() {
     }
   }, []);
 
-  useEffect(() => {
-    carregarDashboard();
-  }, [carregarDashboard]);
+  useEffect(() => { carregarDashboard(); }, [carregarDashboard]);
 
   const resumo = useMemo(
     () => ({
@@ -452,30 +377,20 @@ export default function Home() {
         <div className="flex flex-col gap-6 md:flex-row md:items-end md:justify-between">
           <div>
             <h2 className="text-2xl font-semibold tracking-tight">Bem-vindo</h2>
-            <p className="mt-1 text-slate-300">Visão geral do financeiro e acessos rápidos.</p>
+            <p className="mt-1 text-slate-300">
+              {isAdmin ? "Visão geral do financeiro e acessos rápidos."
+                       : "Visão geral dos blocos e acessos rápidos."}
+            </p>
           </div>
-          <div className="flex gap-3">
-            <Button
-              variant="outline"
-              className="bg-white/10 text-white hover:bg-white/20 border-white/30"
-              onClick={() => navigate("/blocos")}
-            >
-              Abrir blocos
-            </Button>
-            <Button className="bg-blue-600 hover:bg-blue-700" onClick={() => navigate("/financeiro/receber")}>
-              Ir ao Financeiro
-            </Button>
-          </div>
+          <div className="flex gap-3" />
         </div>
       </section>
 
-      {/* erro com ação */}
+      {/* erro */}
       {err && (
         <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-red-700 flex items-center justify-between gap-3">
           <span>{err}</span>
-          <Button variant="outline" onClick={carregarDashboard}>
-            Tentar novamente
-          </Button>
+          <Button variant="outline" onClick={carregarDashboard}>Tentar novamente</Button>
         </div>
       )}
 
@@ -512,94 +427,76 @@ export default function Home() {
           }
         />
 
-        <MetricCard
-          title="Financeiro (abertos)"
-          icon="💰"
-          loading={loading}
-          tooltip="Débito dos blocos (|saldo negativo|) + A receber (abertos)."
-          value={<span className="text-emerald-600">{currency(resumo.financeiroTotal)}</span>}
-        />
-
-        <MetricCard
-          title="A receber (abertos)"
-          icon="📥"
-          loading={loading}
-          value={<span className="text-amber-700">{currency(resumo.aReceberTotal)}</span>}
-        />
+        {/* ===== ADMIN-ONLY ===== */}
+        {isAdmin && (
+          <>
+            <MetricCard
+              title="Financeiro (abertos)"
+              icon="💰"
+              loading={loading}
+              tooltip="Débito dos blocos (|saldo negativo|) + A receber (abertos)."
+              value={<span className="text-emerald-600">{currency(resumo.financeiroTotal)}</span>}
+            />
+            <MetricCard
+              title="A receber (abertos)"
+              icon="📥"
+              loading={loading}
+              value={<span className="text-amber-700">{currency(resumo.aReceberTotal)}</span>}
+            />
+          </>
+        )}
       </section>
 
-      {/* Composição do financeiro (deve bater com o card) */}
-      <section>
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-slate-600">Composição do financeiro (abertos)</CardTitle>
-          </CardHeader>
-          <CardContent className="pt-2">
-            {loading ? (
-              <SkeletonBox className="h-44 w-full" />
-            ) : (
-              <DonutChart a={resumo.debitoBlocoTotal} b={resumo.aReceberTotal} />
-            )}
-          </CardContent>
-        </Card>
-      </section>
+      {/* ===== ADMIN-ONLY: Composição do financeiro ===== */}
+      {isAdmin && (
+        <section>
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-slate-600">Composição do financeiro (abertos)</CardTitle>
+            </CardHeader>
+            <CardContent className="pt-2">
+              {loading ? <SkeletonBox className="h-44 w-full" /> :
+                <DonutChart a={resumo.debitoBlocoTotal} b={resumo.aReceberTotal} />}
+            </CardContent>
+          </Card>
+        </section>
+      )}
 
-      {/* gráfico rápido – Top 5 blocos por exposição */}
-      <section>
-        <Card>
-          <CardHeader className="pb-2">
-            <CardTitle className="text-slate-600">Top 5 blocos por exposição (financeiro)</CardTitle>
-          </CardHeader>
-          <CardContent className="pt-1">
-            {loading ? (
-              <SkeletonBox className="h-28 w-full" />
-            ) : bars.length ? (
-              <div className="overflow-x-auto">
-                <BarsChart data={bars} />
-                <div className="mt-2 flex items-center gap-3 text-xs text-slate-500">
-                  <span className="inline-flex items-center gap-1">
-                    <span className="inline-block h-2 w-2 rounded bg-emerald-500" /> positivo
-                  </span>
-                  <span className="inline-flex items-center gap-1">
-                    <span className="inline-block h-2 w-2 rounded bg-rose-500" /> negativo
-                  </span>
-                </div>
-              </div>
-            ) : (
-              <div className="text-slate-500">Sem dados para exibir.</div>
-            )}
-          </CardContent>
-        </Card>
-      </section>
-
-      {/* atalhos */}
-      <section>
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-slate-600">Acessos rápidos</CardTitle>
-          </CardHeader>
-          <CardContent className="flex flex-wrap gap-3">
-            <Shortcut to="/blocos" label="Blocos" icon="🧩" />
-            <Shortcut to="/clientes" label="Clientes" icon="👥" />
-            <Shortcut to="/financeiro/receber" label="Financeiro" icon="💸" />
-            <Shortcut to="/conferencia" label="Conferência" icon="✅" />
-            <Shortcut to="/transportadoras" label="Transportadoras" icon="🚚" />
-          </CardContent>
-        </Card>
-      </section>
+      {/* ===== ADMIN-ONLY: Top 5 por exposição ===== */}
+      {isAdmin && (
+        <section>
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-slate-600">Top 5 blocos por exposição (financeiro)</CardTitle>
+            </CardHeader>
+            <CardContent className="pt-1">
+              {loading ? <SkeletonBox className="h-28 w-full" /> :
+                (bars.length ? (
+                  <div className="overflow-x-auto">
+                    <BarsChart data={bars} />
+                    <div className="mt-2 flex items-center gap-3 text-xs text-slate-500">
+                      <span className="inline-flex items-center gap-1">
+                        <span className="inline-block h-2 w-2 rounded bg-emerald-500" /> positivo
+                      </span>
+                      <span className="inline-flex items-center gap-1">
+                        <span className="inline-block h-2 w-2 rounded bg-rose-500" /> negativo
+                      </span>
+                    </div>
+                  </div>
+                ) : <div className="text-slate-500">Sem dados para exibir.</div>)}
+            </CardContent>
+          </Card>
+        </section>
+      )}
 
       {/* blocos recentes */}
       <section>
         <div className="mb-3 flex items-center justify-between">
           <h3 className="text-lg font-semibold text-slate-800">Blocos abertos (recentes)</h3>
-          <Link to="/blocos" className="text-sm text-blue-600 hover:underline">
-            ver todos
-          </Link>
+          <Link to="/blocos" className="text-sm text-blue-600 hover:underline">ver todos</Link>
         </div>
-
         <Card>
           <CardContent className="p-0">
-            {/* Tabela desktop */}
             <div className="hidden overflow-x-auto sm:block">
               <table className="min-w-full text-sm">
                 <thead>
@@ -611,76 +508,52 @@ export default function Home() {
                   </tr>
                 </thead>
                 <tbody>
-                  {loading &&
-                    Array.from({ length: 3 }).map((_, i) => (
-                      <tr key={`sk-${i}`} className="border-b last:border-0">
-                        <td className="px-4 py-3">
-                          <SkeletonBox className="h-4 w-48" />
-                        </td>
-                        <td className="px-4 py-3">
-                          <SkeletonBox className="h-6 w-20 rounded-full" />
-                        </td>
-                        <td className="px-4 py-3">
-                          <SkeletonBox className="h-4 w-36" />
-                        </td>
-                        <td className="px-4 py-3">
-                          <SkeletonBox className="h-4 w-14" />
-                        </td>
-                      </tr>
-                    ))}
-
-                  {!loading &&
-                    blocosRecentes.map((b) => (
-                      <tr key={b.id} className="border-b last:border-0 hover:bg-slate-50">
-                        <td className="px-4 py-3">{b.cliente ?? "-"}</td>
-                        <td className="px-4 py-3">
-                          <Badge tone={b.status === "ABERTO" ? "success" : "neutral"}>{b.status}</Badge>
-                        </td>
-                        <td className="px-4 py-3 text-slate-600">{b.aberto_em ?? "-"}</td>
-                        <td className="px-4 py-3">
-                          <Link to={`/blocos/${b.id}`} className="text-blue-600 hover:underline">
-                            Abrir
-                          </Link>
-                        </td>
-                      </tr>
-                    ))}
-
-                  {!loading && blocosRecentes.length === 0 && (
-                    <tr>
-                      <td className="px-4 py-6 text-slate-500" colSpan={6}>
-                        Nenhum bloco aberto encontrado.
+                  {loading && Array.from({ length: 3 }).map((_, i) => (
+                    <tr key={`sk-${i}`} className="border-b last:border-0">
+                      <td className="px-4 py-3"><SkeletonBox className="h-4 w-48" /></td>
+                      <td className="px-4 py-3"><SkeletonBox className="h-6 w-20 rounded-full" /></td>
+                      <td className="px-4 py-3"><SkeletonBox className="h-4 w-36" /></td>
+                      <td className="px-4 py-3"><SkeletonBox className="h-4 w-14" /></td>
+                    </tr>
+                  ))}
+                  {!loading && blocosRecentes.map((b) => (
+                    <tr key={b.id} className="border-b last:border-0 hover:bg-slate-50">
+                      <td className="px-4 py-3">{b.cliente ?? "-"}</td>
+                      <td className="px-4 py-3">
+                        <Badge tone={b.status === "ABERTO" ? "success" : "neutral"}>{b.status}</Badge>
+                      </td>
+                      <td className="px-4 py-3 text-slate-600">{b.aberto_em ?? "-"}</td>
+                      <td className="px-4 py-3">
+                        <Link to={`/blocos/${b.id}`} className="text-blue-600 hover:underline">Abrir</Link>
                       </td>
                     </tr>
+                  ))}
+                  {!loading && blocosRecentes.length === 0 && (
+                    <tr><td className="px-4 py-6 text-slate-500" colSpan={6}>Nenhum bloco aberto encontrado.</td></tr>
                   )}
                 </tbody>
               </table>
             </div>
 
-            {/* Lista mobile */}
+            {/* mobile */}
             <div className="divide-y sm:hidden">
-              {loading &&
-                Array.from({ length: 3 }).map((_, i) => (
-                  <div key={`skm-${i}`} className="p-4 space-y-2">
-                    <SkeletonBox className="h-4 w-40" />
-                    <SkeletonBox className="h-4 w-24" />
-                    <SkeletonBox className="h-8 w-20 rounded-md" />
+              {loading && Array.from({ length: 3 }).map((_, i) => (
+                <div key={`skm-${i}`} className="p-4 space-y-2">
+                  <SkeletonBox className="h-4 w-40" />
+                  <SkeletonBox className="h-4 w-24" />
+                  <SkeletonBox className="h-8 w-20 rounded-md" />
+                </div>
+              ))}
+              {!loading && blocosRecentes.map((b) => (
+                <div key={b.id} className="p-4">
+                  <div className="font-medium">{b.cliente ?? "-"}</div>
+                  <div className="mt-1 text-sm text-slate-600">{b.aberto_em ?? "-"}</div>
+                  <div className="mt-3 flex items-center justify-between">
+                    <Badge tone={b.status === "ABERTO" ? "success" : "neutral"}>{b.status}</Badge>
+                    <Button size="sm" variant="outline" onClick={() => navigate(`/blocos/${b.id}`)}>Abrir</Button>
                   </div>
-                ))}
-
-              {!loading &&
-                blocosRecentes.map((b) => (
-                  <div key={b.id} className="p-4">
-                    <div className="font-medium">{b.cliente ?? "-"}</div>
-                    <div className="mt-1 text-sm text-slate-600">{b.aberto_em ?? "-"}</div>
-                    <div className="mt-3 flex items-center justify-between">
-                      <Badge tone={b.status === "ABERTO" ? "success" : "neutral"}>{b.status}</Badge>
-                      <Button size="sm" variant="outline" onClick={() => navigate(`/blocos/${b.id}`)}>
-                        Abrir
-                      </Button>
-                    </div>
-                  </div>
-                ))}
-
+                </div>
+              ))}
               {!loading && blocosRecentes.length === 0 && (
                 <div className="p-6 text-slate-500">Nenhum bloco aberto encontrado.</div>
               )}

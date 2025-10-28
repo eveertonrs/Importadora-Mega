@@ -32,10 +32,36 @@ function colorFor(id: number) {
   const idx = Math.abs(Number(id || 0)) % NAME_COLORS.length;
   return NAME_COLORS[idx];
 }
-function waLink(raw?: string | null) {
+
+/** Formata número BR de WhatsApp (aceita com/sem +55) */
+function formatWhatsApp(raw?: string | null): string | null {
   if (!raw) return null;
-  const phone = raw.replace(/\D/g, "");
-  return phone ? `https://wa.me/${phone}` : null;
+  const digits = String(raw).replace(/\D/g, "");
+  if (!digits) return null;
+
+  let cc = "";
+  let ddd = "";
+  let num = "";
+
+  if ((digits.length === 13 || digits.length > 13) && digits.startsWith("55")) {
+    cc = "+55 ";
+    ddd = digits.slice(2, 4);
+    num = digits.slice(4);
+  } else if (digits.length === 12 && digits.startsWith("55")) {
+    cc = "+55 ";
+    ddd = digits.slice(2, 4);
+    num = digits.slice(4);
+  } else if (digits.length === 11 || digits.length === 10) {
+    ddd = digits.slice(0, 2);
+    num = digits.slice(2);
+  } else {
+    // formato inesperado: retorna o original visível
+    return raw;
+  }
+
+  if (num.length === 9) return `${cc}(${ddd}) ${num.slice(0, 5)}-${num.slice(5)}`;
+  if (num.length === 8) return `${cc}(${ddd}) ${num.slice(0, 4)}-${num.slice(4)}`;
+  return `${cc}(${ddd}) ${num}`;
 }
 
 const PAGE_SIZE = 10;
@@ -353,7 +379,7 @@ function RowItem({
 }) {
   const btnRef = useRef<HTMLButtonElement>(null);
   const ativo = (c as any).ativo === true || c.status === "ATIVO";
-  const wa = waLink(c.whatsapp);
+  const waFormatted = formatWhatsApp(c.whatsapp);
 
   return (
     <li className="px-4 py-3 hover:bg-slate-50 transition-colors">
@@ -381,19 +407,18 @@ function RowItem({
             </Link>
 
             <div className="mt-0.5 flex flex-wrap items-center gap-2 text-xs">
-              {wa ? (
-                <a
-                  href={wa}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="inline-flex items-center gap-1 text-blue-700 hover:underline"
-                  title="Abrir WhatsApp"
-                >
-                  <svg viewBox="0 0 24 24" className="h-3.5 w-3.5" fill="currentColor" aria-hidden>
+              {waFormatted ? (
+                <span className="inline-flex items-center gap-1 text-slate-700" title="WhatsApp">
+                  <svg
+                    viewBox="0 0 24 24"
+                    className="h-3.5 w-3.5"
+                    fill="currentColor"
+                    aria-hidden
+                  >
                     <path d="M20.52 3.48A11 11 0 0 0 3.3 18.56L2 22l3.56-1.26A11 11 0 1 0 20.52 3.48Zm-8.1 16.06a9.1 9.1 0 0 1-4.64-1.27l-.33-.2-2.06.73.71-2.01-.22-.34a9.08 9.08 0 1 1 6.54 3.09ZM17 14.3c-.1-.15-.39-.24-.82-.43s-.51-.16-.73.13-.28.41-.52.37a6.2 6.2 0 0 1-2.93-1.8 3.38 3.38 0 0 1-.73-1.25c-.08-.25 0-.38.29-.64s.33-.39.49-.65.08-.46 0-.65c-.14-.24-.73-1.77-1-2.42s-.56-.56-.77-.57h-.65a1.25 1.25 0 0 0-.9.42 3.79 3.79 0 0 0-1.2 2.82 6.6 6.6 0 0 0 1.38 3.46 7.58 7.58 0 0 0 3.4 2.77 7.54 7.54 0 0 0 3.6.83c.37 0 .74-.06 1.1-.11a2.54 2.54 0 0 0 1.72-1.18 2.1 2.1 0 0 0 .15-1.15Z" />
                   </svg>
-                  {c.whatsapp}
-                </a>
+                  <span>{waFormatted}</span>
+                </span>
               ) : (
                 <span className="text-slate-400">sem WhatsApp</span>
               )}

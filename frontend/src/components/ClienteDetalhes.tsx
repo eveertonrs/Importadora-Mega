@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState, useMemo } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 import api from "../services/api";
 
@@ -82,7 +82,46 @@ const formatCnpj = (v: string) => {
 const formatDoc = (tipo?: string, num?: string) =>
   !num ? "—" : tipo === "CPF" ? formatCpf(num) : tipo === "CNPJ" ? formatCnpj(num) : num;
 
-/** Regras do card Financeiro (conforme combinado):
+/** Formata WhatsApp BR (aceita com/sem +55) */
+function formatWhatsApp(raw?: string | null) {
+  if (!raw) return "";
+  const digits = onlyDigits(String(raw));
+  if (!digits) return "";
+
+  let cc = "";
+  let ddd = "";
+  let num = "";
+
+  if (digits.startsWith("55") && digits.length >= 12) {
+    cc = "+55 ";
+    ddd = digits.slice(2, 4);
+    num = digits.slice(4);
+  } else {
+    ddd = digits.slice(0, 2);
+    num = digits.slice(2);
+  }
+
+  if (num.length === 9) return `${cc}(${ddd}) ${num.slice(0, 5)}-${num.slice(5)}`;
+  if (num.length === 8) return `${cc}(${ddd}) ${num.slice(0, 4)}-${num.slice(4)}`;
+  return `${cc}(${ddd}) ${num}`;
+}
+
+/** Telefone BR genérico (para transportadoras) */
+function formatPhoneBR(raw?: string | null) {
+  if (!raw) return "";
+  const digits = onlyDigits(String(raw));
+  if (!digits) return "";
+
+  const local = digits.startsWith("55") ? digits.slice(2) : digits;
+  const ddd = local.slice(0, 2);
+  const num = local.slice(2);
+
+  if (num.length === 9) return `(${ddd}) ${num.slice(0, 5)}-${num.slice(5)}`;
+  if (num.length === 8) return `(${ddd}) ${num.slice(0, 4)}-${num.slice(4)}`;
+  return local; // fallback
+}
+
+/** Regras do card Financeiro:
  *  Financeiro = débito do(s) bloco(s) aberto(s) + A Receber
  *  débito do bloco = apenas a parte negativa do saldo_do_bloco (positivo não entra)
  */
@@ -93,6 +132,22 @@ const calcularFinanceiro = (saldoBloco: number, aReceber: number) =>
 export default function ClienteDetalhes() {
   const { id } = useParams<{ id: string }>();
   const nav = useNavigate();
+
+  // ===== papel do usuário (admin x administrativo) =====
+  const role: string | undefined = useMemo(() => {
+    try {
+      const keys = ["auth_user", "auth", "user", "megafin:auth"];
+      for (const k of keys) {
+        const raw = localStorage.getItem(k);
+        if (!raw) continue;
+        const obj = JSON.parse(raw);
+        if (obj?.user?.permissao) return String(obj.user.permissao);
+        if (obj?.permissao) return String(obj.permissao);
+      }
+    } catch {}
+    return undefined;
+  }, []);
+  const hideFinancialCards = role === "administrativo"; // <- regra pedida
 
   const [cli, setCli] = useState<Cliente | null>(null);
   const [loading, setLoading] = useState(true);
@@ -165,8 +220,7 @@ export default function ClienteDetalhes() {
       setSaldoBloco(sb);
       setAReceber(ar);
 
-      // IMPORTANTE: ignora qualquer "financeiro" legado do backend e
-      // aplica a regra definida (débito do bloco + a receber)
+      // regra da tela
       setFinanceiro(calcularFinanceiro(sb, ar));
     } catch {
       setSaldoBloco(0);
@@ -178,7 +232,6 @@ export default function ClienteDetalhes() {
   }
   useEffect(() => {
     recarregarSaldos();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
 
   /* ---------- Documentos ---------- */
@@ -238,7 +291,6 @@ export default function ClienteDetalhes() {
   }, [openAssoc]);
 
   const isAtivo = cli?.status === "ATIVO" || cli?.ativo;
-  const docPrincipal = useMemo(() => docs.find((d) => d.principal), [docs]);
 
   /* ---------- Loading skeleton ---------- */
   if (loading || !cli) {
@@ -290,28 +342,11 @@ export default function ClienteDetalhes() {
             <h1 className="mt-2 truncate text-2xl font-semibold">
               {cli.nome_fantasia} <span className="text-slate-300">#{cli.id}</span>
             </h1>
-
-            <div className="mt-1 text-sm text-slate-300">
-              {docPrincipal ? (
-                <>
-                  Doc principal: <span className="font-medium">{docPrincipal.doc_tipo}</span>{" "}
-                  <button
-                    className="underline decoration-1 underline-offset-2 hover:text-white/90"
-                    onClick={() => copy(onlyDigits(docPrincipal.doc_numero))}
-                    title="Copiar"
-                  >
-                    {formatDoc(docPrincipal.doc_tipo, docPrincipal.doc_numero)}
-                  </button>
-                </>
-              ) : (
-                <span className="opacity-75">Sem documento principal</span>
-              )}
-              {cli.tabela_preco && <span className="ml-3">• Tabela: {cli.tabela_preco}</span>}
-            </div>
           </div>
 
           {/* Cards */}
-          <div className="grid grid-cols-3 gap-3 min-w-[28rem]">
+          <div className={`grid gap-3 min-w-[28rem] ${hideFinancialCards ? "grid-cols-1" : "grid-cols-3"}`}>
+            {/* Saldo do bloco - SEMPRE visível */}
             <div
               className={`rounded-2xl bg-gradient-to-br px-4 py-3 ring-1 ${toneOf(
                 saldoBloco
@@ -324,31 +359,37 @@ export default function ClienteDetalhes() {
               </div>
             </div>
 
-            <div
-              className={`rounded-2xl bg-gradient-to-br px-4 py-3 ring-1 ${toneOf(
-                financeiro
-              )} shadow-sm`}
-              title="(Regra da tela) Financeiro = débito do bloco (se negativo) + A Receber."
-            >
-              <div className="text-xs text-slate-700/80">Financeiro</div>
-              <div className="text-2xl font-bold tracking-tight">
-                {saldoLoading ? "…" : formatBRL(financeiro)}
+            {/* Financeiro - apenas para quem NÃO é 'administrativo' */}
+            {!hideFinancialCards && (
+              <div
+                className={`rounded-2xl bg-gradient-to-br px-4 py-3 ring-1 ${toneOf(
+                  financeiro
+                )} shadow-sm`}
+                title="(Regra da tela) Financeiro = débito do bloco (se negativo) + A Receber."
+              >
+                <div className="text-xs text-slate-700/80">Financeiro</div>
+                <div className="text-2xl font-bold tracking-tight">
+                  {saldoLoading ? "…" : formatBRL(financeiro)}
+                </div>
               </div>
-            </div>
+            )}
 
-            <div
-              className="rounded-2xl bg-gradient-to-br from-amber-50 to-yellow-50 ring-1 ring-amber-200 text-amber-900 px-4 py-3 shadow-sm"
-              title="TODOS os títulos do cliente em ABERTO/PARCIAL (qualquer bloco)."
-            >
-              <div className="text-xs">A receber</div>
-              <div className="text-2xl font-bold tracking-tight">
-                {saldoLoading ? "…" : formatBRL(aReceber)}
+            {/* A receber - apenas para quem NÃO é 'administrativo' */}
+            {!hideFinancialCards && (
+              <div
+                className="rounded-2xl bg-gradient-to-br from-amber-50 to-yellow-50 ring-1 ring-amber-200 text-amber-900 px-4 py-3 shadow-sm"
+                title="TODOS os títulos do cliente em ABERTO/PARCIAL (qualquer bloco)."
+              >
+                <div className="text-xs">A receber</div>
+                <div className="text-2xl font-bold tracking-tight">
+                  {saldoLoading ? "…" : formatBRL(aReceber)}
+                </div>
               </div>
-            </div>
+            )}
 
             <button
               onClick={recarregarSaldos}
-              className="col-span-3 mt-1 rounded-xl bg-white/10 px-3 py-1.5 text-white ring-1 ring-white/30 hover:bg-white/20"
+              className={`mt-1 rounded-xl bg-white/10 px-3 py-1.5 text-white ring-1 ring-white/30 hover:bg-white/20 ${hideFinancialCards ? "col-span-1" : "col-span-3"}`}
               title="Recarregar saldos"
             >
               ↻ Atualizar saldos
@@ -378,22 +419,15 @@ export default function ClienteDetalhes() {
               <div className="text-xs font-medium text-slate-500">WhatsApp</div>
               {cli.whatsapp ? (
                 <div className="flex items-center gap-2">
-                  <a
-                    className="inline-flex items-center gap-2 text-blue-700 underline decoration-1 underline-offset-2 hover:text-blue-800"
-                    href={`https://wa.me/${cli.whatsapp.replace(/\D/g, "")}`}
-                    target="_blank"
-                    rel="noreferrer"
-                    title="Abrir no WhatsApp"
-                  >
-                    {cli.whatsapp}
+                  <span className="inline-flex items-center gap-1 text-slate-700" title="WhatsApp">
                     <svg viewBox="0 0 24 24" className="h-4 w-4" fill="currentColor" aria-hidden>
-                      <path d="M14 3h7v7h-2V6.41l-9.29 9.3-1.42-1.42 9.3-9.29H14V3z" />
-                      <path d="M5 5h5V3H3v7h2V5z" />
+                      <path d="M20.52 3.48A11 11 0 0 0 3.3 18.56L2 22l3.56-1.26A11 11 0 1 0 20.52 3.48Zm-8.1 16.06a9.1 9.1 0 0 1-4.64-1.27l-.33-.2-2.06.73.71-2.01-.22-.34a9.08 9.08 0 1 1 6.54 3.09ZM17 14.3c-.1-.15-.39-.24-.82-.43s-.51-.16-.73.13-.28.41-.52.37a6.2 6.2 0 0 1-2.93-1.8 3.38 3.38 0 0 1-.73-1.25c-.08-.25 0-.38.29-.64s.33-.39.49-.65.08-.46 0-.65c-.14-.24-.73-1.77-1-2.42s-.56-.56-.77-.57h-.65a1.25 1.25 0 0 0-.9.42 3.79 3.79 0 0 0-1.2 2.82 6.6 6.6 0 0 0 1.38 3.46 7.58 7.58 0 0 0 3.4 2.77 7.54 7.54 0 0 0 3.6.83c.37 0 .74-.06 1.1-.11a2.54 2.54 0 0 0 1.72-1.18 2.1 2.1 0 0 0 .15-1.15Z" />
                     </svg>
-                  </a>
+                    {formatWhatsApp(cli.whatsapp)}
+                  </span>
                   <button
                     className="text-xs rounded border px-2 py-1 hover:bg-slate-50"
-                    onClick={() => copy(cli.whatsapp!)}
+                    onClick={() => copy(onlyDigits(cli.whatsapp!))}
                     title="Copiar"
                   >
                     Copiar
@@ -536,56 +570,60 @@ export default function ClienteDetalhes() {
               <div className="text-sm text-slate-500">Nenhuma transportadora associada.</div>
             ) : (
               <ul className="space-y-2">
-                {vRows.map((r) => (
-                  <li
-                    key={r.transportadora_id}
-                    className="flex items-center justify-between rounded border bg-slate-50/60 px-3 py-2 text-sm"
-                  >
-                    <div className="flex min-w-0 items-center gap-2">
-                      <span
-                        className={
-                          "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] ring-1 " +
-                          (r.principal
-                            ? "bg-amber-50 text-amber-700 ring-amber-200"
-                            : "bg-slate-50 text-slate-600 ring-slate-200")
-                        }
-                        title={r.principal ? "Transportadora principal" : "Vínculo"}
-                      >
-                        {r.principal ? "PRINCIPAL" : "VÍNCULO"}
-                      </span>
-                      <div className="truncate">
-                        <div className="truncate font-medium">{nomeTransp(r) || `#${r.transportadora_id}`}</div>
-                        <div className="truncate text-xs text-slate-500">{r.cnpj || r.telefone || "—"}</div>
+                {vRows.map((r) => {
+                  const sec =
+                    r.cnpj ? formatCnpj(r.cnpj) : r.telefone ? formatPhoneBR(r.telefone) : "—";
+                  return (
+                    <li
+                      key={r.transportadora_id}
+                      className="flex items-center justify-between rounded border bg-slate-50/60 px-3 py-2 text-sm"
+                    >
+                      <div className="flex min-w-0 items-center gap-2">
+                        <span
+                          className={
+                            "inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] ring-1 " +
+                            (r.principal
+                              ? "bg-amber-50 text-amber-700 ring-amber-200"
+                              : "bg-slate-50 text-slate-600 ring-slate-200")
+                          }
+                          title={r.principal ? "Transportadora principal" : "Vínculo"}
+                        >
+                          {r.principal ? "PRINCIPAL" : "VÍNCULO"}
+                        </span>
+                        <div className="truncate">
+                          <div className="truncate font-medium">{nomeTransp(r) || `#${r.transportadora_id}`}</div>
+                          <div className="truncate text-xs text-slate-500">{sec}</div>
+                        </div>
                       </div>
-                    </div>
-                    <div className="flex shrink-0 items-center gap-2">
-                      {!r.principal && (
+                      <div className="flex shrink-0 items-center gap-2">
+                        {!r.principal && (
+                          <button
+                            onClick={async () => {
+                              await api.patch(
+                                `/clientes/${cli.id}/transportadoras/${r.transportadora_id}`,
+                                { principal: true }
+                              );
+                              await loadVinculos();
+                            }}
+                            className="rounded border px-2 py-1 text-xs hover:bg-slate-50"
+                          >
+                            Tornar principal
+                          </button>
+                        )}
                         <button
                           onClick={async () => {
-                            await api.patch(
-                              `/clientes/${cli.id}/transportadoras/${r.transportadora_id}`,
-                              { principal: true }
-                            );
+                            if (!confirm("Remover vínculo desta transportadora?")) return;
+                            await api.delete(`/clientes/${cli.id}/transportadoras/${r.transportadora_id}`);
                             await loadVinculos();
                           }}
-                          className="rounded border px-2 py-1 text-xs hover:bg-slate-50"
+                          className="rounded border px-2 py-1 text-xs text-rose-700 hover:bg-rose-50"
                         >
-                          Tornar principal
+                          Remover
                         </button>
-                      )}
-                      <button
-                        onClick={async () => {
-                          if (!confirm("Remover vínculo desta transportadora?")) return;
-                          await api.delete(`/clientes/${cli.id}/transportadoras/${r.transportadora_id}`);
-                          await loadVinculos();
-                        }}
-                        className="rounded border px-2 py-1 text-xs text-rose-700 hover:bg-rose-50"
-                      >
-                        Remover
-                      </button>
-                    </div>
-                  </li>
-                ))}
+                      </div>
+                    </li>
+                  );
+                })}
               </ul>
             )}
           </div>
