@@ -181,7 +181,7 @@ export default function HistoricoPagamentos() {
     (async () => {
       if (debounced.trim().length < 2 || clienteId !== "") { setCliOpts([]); return; }
       try {
-        const { data } = await api.get("/clientes", { params: { search: debounced, limit: 10 } });
+        const { data } = await api.get("/clientes", { params: { search: debounced, limit: 10, status: "ATIVO" } });
         if (!active) return;
         const list: Cliente[] = (data?.data ?? data ?? []).slice(0, 10);
         setCliOpts(list); setCliOpen(list.length > 0);

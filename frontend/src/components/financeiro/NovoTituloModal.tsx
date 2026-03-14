@@ -54,7 +54,7 @@ export default function NovoTituloModal({ open, onClose, onDone }: Props) {
     }
     const t = setTimeout(async () => {
       try {
-        const { data } = await api.get("/clientes", { params: { search: q, limit: 10 } });
+        const { data } = await api.get("/clientes", { params: { search: q, limit: 10, status: "ATIVO" } });
         setCliOpts((data?.data ?? data ?? []).slice(0, 10));
         setCliOpen(true);
       } catch {/* ignore */}

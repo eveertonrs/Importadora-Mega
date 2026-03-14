@@ -94,7 +94,7 @@ export default function Blocos() {
     (async () => {
       try {
         const { data } = await api.get("/clientes", {
-          params: { search: debouncedBuscaCliente, limit: 10 },
+          params: { search: debouncedBuscaCliente, limit: 10, status: "ATIVO" },
         });
         if (cancel) return;
         const list: Cliente[] = (data?.data ?? data ?? []).slice(0, 10);
@@ -348,6 +348,7 @@ export default function Blocos() {
                   Cliente
                   {sortKey === "cliente" && <SortIcon dir={sortDir} />}
                 </th>
+                <th className="p-3 text-left font-medium text-slate-700">ID / Bloco</th>
                 <th
                   className="p-3 text-left font-medium text-slate-700 select-none"
                   role="button"
@@ -367,6 +368,9 @@ export default function Blocos() {
                       <div className="h-3 w-40 bg-slate-200 rounded" />
                     </td>
                     <td className="p-3 border-b">
+                      <div className="h-3 w-20 bg-slate-200 rounded font-mono" />
+                    </td>
+                    <td className="p-3 border-b">
                       <div className="h-5 w-16 bg-slate-200 rounded-full" />
                     </td>
                     <td className="p-3 border-b">
@@ -379,10 +383,17 @@ export default function Blocos() {
                 rows.map((b) => (
                   <tr
                     key={b.id}
-                    className="hover:bg-slate-50/80 cursor-pointer"
+                    className={
+                      b.status === "FECHADO"
+                        ? "bg-emerald-50/80 hover:bg-emerald-100/80 cursor-pointer"
+                        : "bg-rose-50/80 hover:bg-rose-100/80 cursor-pointer"
+                    }
                     onClick={() => (window.location.href = `/blocos/${b.id}`)}
                   >
                     <td className="p-3 border-b">{b.cliente_nome ?? b.cliente_id}</td>
+                    <td className="p-3 border-b font-mono text-sm text-slate-700" title={`Bloco #${(b as any).sequencial_cliente ?? b.id} do cliente`}>
+                      {b.codigo ?? `#${(b as any).sequencial_cliente ?? b.id}`}
+                    </td>
                     <td className="p-3 border-b">
                       <span
                         className={
@@ -411,7 +422,7 @@ export default function Blocos() {
 
               {!skeleton && rows.length === 0 && !loading && (
                 <tr>
-                  <td colSpan={3} className="p-10 text-center">
+                  <td colSpan={4} className="p-10 text-center">
                     <div className="space-y-2">
                       <div className="text-slate-500">Nenhum bloco encontrado com os filtros atuais.</div>
                       <button

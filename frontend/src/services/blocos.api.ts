@@ -12,6 +12,8 @@ export type Bloco = {
   aberto_em?: string | null;
   fechado_em?: string | null;
   observacao?: string | null;
+  /** Número sequencial do bloco para o cliente (1, 2, 3…) — usado na conferência */
+  sequencial_cliente?: number | null;
 };
 
 export type SaldosResponse = {
@@ -49,6 +51,15 @@ export async function getBloco(id: number) {
 export async function fecharBloco(id: number) {
   const { data } = await api.post(`/blocos/${id}/fechar`);
   return data;
+}
+
+export async function reabrirBloco(id: number) {
+  const { data } = await api.patch(`/blocos/${id}/reabrir`);
+  return data;
+}
+
+export async function excluirBloco(id: number) {
+  await api.delete(`/blocos/${id}`);
 }
 
 /* ------------ Lançamentos ------------ */

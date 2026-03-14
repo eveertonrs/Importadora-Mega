@@ -56,9 +56,9 @@ type Doc = {
   doc_tipo: "CNPJ" | "CPF";
   doc_numero: string;
   principal: boolean;
-  // modelo_nota saiu da UI
-  tipo_nota: "MEIA" | "INTEGRAL";
+  tipo_nota?: "MEIA" | "INTEGRAL";
   percentual_nf?: number | null;
+  nome?: string | null;
 };
 
 export default function ClienteDocumentoForm() {
@@ -70,9 +70,9 @@ export default function ClienteDocumentoForm() {
 
   const [docTipo, setDocTipo] = useState<"CNPJ" | "CPF">("CNPJ");
   const [docNumeroRaw, setDocNumeroRaw] = useState("");
+  const [docNome, setDocNome] = useState("");
   const [docPrincipal, setDocPrincipal] = useState(true);
   const [percentual, setPercentual] = useState<number>(100);
-  const [tipoNota, setTipoNota] = useState<"INTEGRAL" | "MEIA">("INTEGRAL");
 
   const [savingDoc, setSavingDoc] = useState(false);
   const [errDoc, setErrDoc] = useState<string | null>(null);
@@ -115,12 +115,11 @@ export default function ClienteDocumentoForm() {
         doc_numero: docNumeroClean,
         principal: !!docPrincipal,
         percentual_nf: Math.max(0, Math.min(100, percentual)),
-        // modelo_nota removido do payload
-        tipo_nota: tipoNota,
+        nome: docNome.trim() || null,
       });
       setDocNumeroRaw("");
+      setDocNome("");
       setPercentual(100);
-      setTipoNota("INTEGRAL");
       setDocPrincipal(true);
       await load();
       flash("Documento adicionado!");
@@ -232,17 +231,15 @@ export default function ClienteDocumentoForm() {
             <p className="text-xs text-slate-500 mt-1">0–100%</p>
           </div>
 
-          <div className="md:col-span-2">
-            <label className="text-sm text-slate-600">Tipo da nota</label>
-            <select
+          <div className="md:col-span-3">
+            <label className="text-sm text-slate-600">Nome (cliente/documento)</label>
+            <input
+              type="text"
               className="mt-1 border rounded-xl px-3 py-2 w-full"
-              value={tipoNota}
-              onChange={(e) => setTipoNota((e.target.value as "INTEGRAL" | "MEIA") ?? "INTEGRAL")}
-            >
-              <option value="INTEGRAL">INTEGRAL</option>
-              <option value="MEIA">MEIA</option>
-            </select>
-            <p className="text-xs text-slate-500 mt-1">Compatível com o CHECK do banco.</p>
+              value={docNome}
+              onChange={(e) => setDocNome(e.target.value)}
+              placeholder="Nome para identificar o documento"
+            />
           </div>
 
           <label className="md:col-span-12 flex items-center gap-2 pt-1">
@@ -266,85 +263,70 @@ export default function ClienteDocumentoForm() {
             {savingDoc ? "Salvando…" : "Adicionar documento"}
           </button>
           <button
-            onClick={() => { setDocNumeroRaw(""); setPercentual(100); setTipoNota("INTEGRAL"); setDocPrincipal(true); }}
+            onClick={() => { setDocNumeroRaw(""); setDocNome(""); setPercentual(100); setDocPrincipal(true); }}
             className="px-3 py-2 rounded-xl border hover:bg-slate-50"
           >
             Limpar
           </button>
         </div>
 
-        <div className="overflow-x-auto rounded-2xl border">
-          <table className="w-full text-sm">
-            <thead className="bg-slate-50 sticky top-0 z-10">
-              <tr className="text-left">
-                <th className="p-2 border w-14">#</th>
-                <th className="p-2 border w-20">Tipo</th>
-                <th className="p-2 border">Número</th>
-                <th className="p-2 border w-28">Principal</th>
-                <th className="p-2 border w-28">Tipo (nota)</th>
-                <th className="p-2 border w-40">Percentual</th>
-                <th className="p-2 border w-28">Ações</th>
-              </tr>
-            </thead>
-            <tbody>
-              {loading && (
-                <tr>
-                  <td colSpan={7} className="p-6 text-center text-slate-500">Carregando…</td>
-                </tr>
-              )}
+        <div className="space-y-4">
+          {loading && (
+            <div className="rounded-xl bg-slate-50 py-10 text-center text-sm text-slate-500">
+              Carregando…
+            </div>
+          )}
 
-              {!loading && docs.length === 0 && (
-                <tr>
-                  <td colSpan={7} className="p-10 text-center text-slate-500">
-                    Nenhum documento cadastrado. <span className="underline">Adicione o primeiro acima</span>.
-                  </td>
-                </tr>
-              )}
+          {!loading && docs.length === 0 && (
+            <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50/50 py-10 text-center text-sm text-slate-500">
+              Nenhum documento cadastrado. Adicione o primeiro no formulário acima.
+            </div>
+          )}
 
-              {!loading && docs.map((d) => (
-                <tr key={d.id} className="hover:bg-slate-50">
-                  <td className="p-2 border">{d.id}</td>
-                  <td className="p-2 border">{d.doc_tipo}</td>
-                  <td className="p-2 border">
-                    {d.doc_tipo === "CPF" ? formatCpf(d.doc_numero) : formatCnpj(d.doc_numero)}
-                  </td>
-
-                  {/* principal */}
-                  <td className="p-2 border">
-                    <label className="inline-flex items-center gap-2">
+          {!loading &&
+            docs.map((d) => {
+              const nomeVal = (d as any).nome ?? d.nome ?? "";
+              const isPrincipal = !!d.principal;
+              return (
+                <div
+                  key={d.id}
+                  className={`rounded-xl border p-4 ${
+                    isPrincipal ? "border-amber-400 bg-amber-50/80 ring-1 ring-amber-200" : "border-slate-200 bg-slate-50/40"
+                  }`}
+                >
+                  <div className="grid gap-4 sm:grid-cols-12">
+                    <div className="sm:col-span-12 md:col-span-5">
+                      <label className="mb-1 block text-xs font-medium text-slate-500">Nome do cliente / documento</label>
                       <input
-                        type="radio"
-                        name={`principal-${d.id}`}
-                        checked={d.principal}
-                        onChange={() => updateField(d.id, { principal: true }, "Definido como principal")}
+                        type="text"
+                        className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-blue-400 focus:outline-none focus:ring-2 focus:ring-blue-400/30"
+                        defaultValue={nomeVal}
+                        placeholder="Ex.: João Silva"
+                        onBlur={(e) => {
+                          const v = e.currentTarget.value.trim();
+                          if (v !== nomeVal) updateField(d.id, { nome: v || null });
+                        }}
                       />
-                      <span>{d.principal ? "Sim" : "Não"}</span>
-                    </label>
-                  </td>
-
-                  {/* tipo_nota (inline) */}
-                  <td className="p-2 border">
-                    <select
-                      className="border rounded-lg px-2 py-1"
-                      defaultValue={d.tipo_nota || "INTEGRAL"}
-                      onBlur={(e) => {
-                        const v = (e.currentTarget.value as "INTEGRAL" | "MEIA");
-                        if (v !== (d.tipo_nota || "INTEGRAL")) updateField(d.id, { tipo_nota: v });
-                      }}
-                    >
-                      <option value="INTEGRAL">INTEGRAL</option>
-                      <option value="MEIA">MEIA</option>
-                    </select>
-                  </td>
-
-                  {/* percentual (inline) */}
-                  <td className="p-2 border">
-                    <div className="flex items-center gap-1">
+                    </div>
+                    <div className="sm:col-span-6 md:col-span-2">
+                      <label className="mb-1 block text-xs font-medium text-slate-500">Tipo</label>
+                      <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
+                        {d.doc_tipo}
+                      </div>
+                    </div>
+                    <div className="sm:col-span-6 md:col-span-2">
+                      <label className="mb-1 block text-xs font-medium text-slate-500">Número</label>
+                      <div className="font-mono text-sm text-slate-700">
+                        {d.doc_tipo === "CPF" ? formatCpf(d.doc_numero) : formatCnpj(d.doc_numero)}
+                      </div>
+                    </div>
+                    <div className="sm:col-span-4 md:col-span-1">
+                      <label className="mb-1 block text-xs font-medium text-slate-500">%</label>
                       <input
                         type="number"
                         min={0}
                         max={100}
-                        className="border rounded-lg px-2 py-1 w-24"
+                        className="w-full rounded-lg border border-slate-300 px-2 py-2 text-sm"
                         defaultValue={d.percentual_nf ?? 100}
                         onBlur={(e) => {
                           const val = Math.max(0, Math.min(100, Number(e.currentTarget.value)));
@@ -352,19 +334,32 @@ export default function ClienteDocumentoForm() {
                         }}
                         title="Edite e saia do campo para salvar"
                       />
-                      <span>%</span>
                     </div>
-                  </td>
-
-                  <td className="p-2 border">
-                    <button onClick={() => delDoc(d.id)} className="text-red-700 hover:underline">
-                      Remover
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+                    <div className="sm:col-span-4 md:col-span-1 flex flex-col justify-end">
+                      <label className="mb-1 block text-xs font-medium text-slate-500">Principal</label>
+                      <label className="inline-flex cursor-pointer items-center gap-2">
+                        <input
+                          type="radio"
+                          name="principal-doc"
+                          checked={d.principal}
+                          onChange={() => updateField(d.id, { principal: true }, "Definido como principal")}
+                        />
+                        <span className="text-sm">{d.principal ? "Sim" : "Não"}</span>
+                      </label>
+                    </div>
+                    <div className="sm:col-span-4 md:col-span-1 flex flex-col justify-end">
+                      <button
+                        type="button"
+                        onClick={() => delDoc(d.id)}
+                        className="rounded-lg border border-rose-200 px-3 py-2 text-sm text-rose-700 hover:bg-rose-50"
+                      >
+                        Remover
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
         </div>
       </div>
     </div>

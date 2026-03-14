@@ -6,6 +6,8 @@ import {
   adicionarLancamento,
   getSaldos,
   fecharBloco,
+  reabrirBloco,
+  excluirBloco,
   excluirLancamento,
 } from "../../services/blocos.api";
 import type { SaldosResponse } from "../../services/blocos.api";
@@ -62,7 +64,7 @@ export default function BlocoDetalhe() {
   const blocoId = Number(id);
 
   const { user } = useAuth();
-  const canDelete = user?.permissao === "admin"; // ⚠️ apenas admin pode excluir
+  const canDelete = (user?.permissao ?? "").toLowerCase() === "admin";
 
   const [b, setB] = useState<DetBloco | null>(null);
 
@@ -92,6 +94,9 @@ export default function BlocoDetalhe() {
   const [fStatus, setFStatus] = useState<"" | LancStatus>("");
   const [fTipo, setFTipo] = useState<string>("");
 
+  const [showExcluirBlocoModal, setShowExcluirBlocoModal] = useState(false);
+  const [excluindoBloco, setExcluindoBloco] = useState(false);
+
   /** ▼▼ Parâmetros do pedido (dinâmicos) ▼▼ **/
   const [parametros, setParametros] = useState<ParametroItem[]>([]);
   const [paramSelecionadoId, setParamSelecionadoId] = useState<number | "">("");
@@ -115,6 +120,7 @@ export default function BlocoDetalhe() {
   const [bomPara, setBomPara] = useState<string>("");
 
   const podeFechar = useMemo(() => b?.status === "ABERTO", [b?.status]);
+  const podeReabrir = useMemo(() => b?.status === "FECHADO", [b?.status]);
   const podeEditar = podeFechar;
 
   // helpers de moeda
@@ -226,10 +232,6 @@ export default function BlocoDetalhe() {
   }
 
   async function doDel(lancId: number, temBomPara: boolean) {
-    if (!canDelete) {
-      alert("Somente o administrador pode excluir lançamentos.");
-      return;
-    }
     if (!podeEditar) return;
 
     const msg = temBomPara
@@ -244,6 +246,34 @@ export default function BlocoDetalhe() {
       await loadLancs();
     } catch (e: any) {
       alert(e?.response?.data?.message || "Falha ao excluir lançamento.");
+    }
+  }
+
+  async function doReabrir() {
+    if (!podeReabrir) return;
+    try {
+      await reabrirBloco(blocoId);
+      await load();
+      await loadLancs();
+    } catch (e: any) {
+      alert(e?.response?.data?.message || "Falha ao reabrir bloco.");
+    }
+  }
+
+  function abrirModalExcluirBloco() {
+    setShowExcluirBlocoModal(true);
+  }
+
+  async function confirmarExcluirBloco() {
+    try {
+      setExcluindoBloco(true);
+      await excluirBloco(blocoId);
+      setShowExcluirBlocoModal(false);
+      nav("/blocos");
+    } catch (e: any) {
+      alert(e?.response?.data?.message || "Falha ao excluir bloco.");
+    } finally {
+      setExcluindoBloco(false);
     }
   }
 
@@ -300,22 +330,30 @@ export default function BlocoDetalhe() {
           <button onClick={() => nav(-1)} className="px-3 py-2 rounded-lg border hover:bg-slate-50">
             ← Voltar
           </button>
-          <h1 className="text-xl font-semibold">
-            {b?.cliente_nome ?? `Cliente #${b?.cliente_id}`}
-          </h1>
-          {b && (
-            <span
-              className={
-                "text-[11px] px-2 py-0.5 rounded-full font-medium ring-1 " +
-                (b.status === "ABERTO"
-                  ? "bg-blue-200 text-blue-900 ring-blue-300"
-                  : "bg-slate-300 text-slate-900 ring-slate-400")
-              }
-            >
-              {b.status}
-            </span>
-          )}
+          <div className="flex flex-wrap items-center gap-2">
+            <h1 className="text-xl font-semibold">
+              {b?.cliente_nome ?? `Cliente #${b?.cliente_id}`}
+            </h1>
+            {b && (
+              <>
+                <span className="font-mono text-sm text-slate-600" title="ID do bloco para conferência">
+                  {(b as any).codigo ?? `#${(b as any).sequencial_cliente ?? b?.id}`}
+                </span>
+                <span
+                  className={
+                    "text-[11px] px-2 py-0.5 rounded-full font-medium ring-1 " +
+                    (b.status === "ABERTO"
+                      ? "bg-blue-200 text-blue-900 ring-blue-300"
+                      : "bg-slate-300 text-slate-900 ring-slate-400")
+                  }
+                >
+                  {b.status}
+                </span>
+              </>
+            )}
+          </div>
         </div>
+        <div className="flex items-center gap-3">
         <button
           onClick={doFechar}
           disabled={!podeFechar}
@@ -324,6 +362,25 @@ export default function BlocoDetalhe() {
         >
           Fechar bloco
         </button>
+        {podeReabrir && (
+          <button
+            onClick={doReabrir}
+            className="px-3 py-2 rounded-xl bg-amber-600 text-white hover:bg-amber-700"
+            title="Reabrir bloco para novas edições"
+          >
+            Reabrir bloco
+          </button>
+        )}
+        {canDelete && (
+          <button
+            onClick={abrirModalExcluirBloco}
+            className="px-3 py-2 rounded-xl border border-rose-300 text-rose-700 hover:bg-rose-50"
+            title="Excluir bloco (somente se não houver lançamentos confirmados na conferência)"
+          >
+            Excluir bloco
+          </button>
+        )}
+        </div>
       </div>
 
       {/* Tabs */}
@@ -565,11 +622,11 @@ export default function BlocoDetalhe() {
                       <td className="p-2 border">
                         <button
                           className="px-2 py-1 rounded-lg border text-xs hover:bg-slate-50 disabled:opacity-50"
-                          disabled={!canDelete || !podeEditar}
+                          disabled={l.status !== "PENDENTE" || !podeEditar}
                           onClick={() => doDel(l.id, !!l.bom_para)}
                           title={
-                            !canDelete
-                              ? "Apenas administrador pode excluir"
+                            l.status !== "PENDENTE"
+                              ? "Só é possível excluir lançamentos com status PENDENTE"
                               : l.bom_para
                               ? "Excluir lançamento e também o título gerado (se não houver baixas)"
                               : "Excluir lançamento"
@@ -628,6 +685,50 @@ export default function BlocoDetalhe() {
             <div>
               <div className="text-xs text-slate-500">Fechado em</div>
               <div className="font-medium">{dateTimeBR(b?.fechado_em as any)}</div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal: confirmar exclusão permanente do bloco */}
+      {showExcluirBlocoModal && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+          onClick={() => !excluindoBloco && setShowExcluirBlocoModal(false)}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="excluir-bloco-modal-title"
+        >
+          <div
+            className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-6 shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 id="excluir-bloco-modal-title" className="text-lg font-semibold text-slate-800">
+              Excluir bloco permanentemente?
+            </h2>
+            <p className="mt-2 text-slate-600">
+              O bloco de <strong>{b?.cliente_nome ?? `Cliente #${b?.cliente_id}`}</strong> e todos os lançamentos serão removidos do sistema. Esta ação não pode ser desfeita.
+            </p>
+            <p className="mt-1 text-sm text-slate-500">
+              Só é possível excluir se nenhum lançamento tiver sido confirmado na conferência.
+            </p>
+            <div className="mt-6 flex justify-end gap-3">
+              <button
+                type="button"
+                disabled={excluindoBloco}
+                onClick={() => setShowExcluirBlocoModal(false)}
+                className="rounded-xl border border-slate-300 px-4 py-2 text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                disabled={excluindoBloco}
+                onClick={confirmarExcluirBloco}
+                className="rounded-xl bg-rose-600 px-4 py-2 text-white hover:bg-rose-700 disabled:opacity-50"
+              >
+                {excluindoBloco ? "Excluindo…" : "Excluir permanentemente"}
+              </button>
             </div>
           </div>
         </div>

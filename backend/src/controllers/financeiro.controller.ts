@@ -402,7 +402,7 @@ export const conferenciaDiaria = async (req: Request, res: Response) => {
             bl.tipo_recebimento             AS tipo,
             bl.numero_referencia            AS numero_doc,
             CAST(NULL AS date)              AS bom_para,
-            bl.valor                        AS valor,
+            CASE WHEN bl.sentido = 'ENTRADA' THEN -bl.valor ELSE bl.valor END AS valor,
             bl.status                       AS status_negocio,
             bl.bloco_id                     AS bloco_id,
             CAST(NULL AS int)               AS titulo_id
@@ -423,7 +423,7 @@ export const conferenciaDiaria = async (req: Request, res: Response) => {
             t.tipo                           AS tipo,
             t.numero_doc                     AS numero_doc,
             CAST(t.bom_para AS date)         AS bom_para,
-            t.valor_bruto                    AS valor,
+            -t.valor_bruto                   AS valor,
             t.status                         AS status_negocio,
             t.bloco_id                       AS bloco_id,
             t.id                             AS titulo_id

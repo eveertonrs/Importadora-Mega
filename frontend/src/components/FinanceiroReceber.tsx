@@ -47,7 +47,7 @@ function dueBadge(date?: string | null) {
 
 type PrazoFiltro = "ALL" | "D0" | "D1" | "D2" | "D3" | "ATE7" | "ATRASO" | "SEM_DATA";
 type TipoFiltro = "all" | "BOLETO" | "CHEQUE";
-type Ordenar = "BOM_PARA_ASC" | "BOM_PARA_DESC" | "DIAS_ASC" | "PENDENTE_DESC";
+type Ordenar = "BOM_PARA_ASC" | "BOM_PARA_DESC" | "DIAS_ASC" | "PENDENTE_DESC" | "CLIENTE_ASC";
 
 export default function FinanceiroReceber() {
   const [items, setItems] = useState<Titulo[]>([]);
@@ -62,7 +62,7 @@ export default function FinanceiroReceber() {
   // FILTROS (cliente)
   const [prazo, setPrazo] = useState<PrazoFiltro>("ALL");
   const [tipo, setTipo] = useState<TipoFiltro>("all");
-  const [ordenar, setOrdenar] = useState<Ordenar>("BOM_PARA_ASC");
+  const [ordenar, setOrdenar] = useState<Ordenar>("CLIENTE_ASC");
 
   // BAIXA
   const [showBaixa, setShowBaixa] = useState(false);
@@ -154,6 +154,9 @@ export default function FinanceiroReceber() {
       });
     }
 
+    const clienteCmp = (x: Titulo, y: Titulo) =>
+      String(x.cliente_nome ?? "").trim().localeCompare(String(y.cliente_nome ?? "").trim(), "pt-BR");
+
     list.sort((a, b) => {
       const aDias = Math.round(daysToDue(a.bom_para));
       const bDias = Math.round(daysToDue(b.bom_para));
@@ -162,25 +165,32 @@ export default function FinanceiroReceber() {
       const aPend = getPendente(a);
       const bPend = getPendente(b);
 
+      // Agrupado por cliente, ordem alfabética crescente (A→Z)
+      if (ordenar === "CLIENTE_ASC") {
+        const byCliente = clienteCmp(a, b);
+        if (byCliente !== 0) return byCliente;
+        if (aTime !== bTime) return aTime - bTime;
+        return a.id - b.id;
+      }
       if (ordenar === "BOM_PARA_ASC") {
         if (aTime !== bTime) return aTime - bTime;
         if (aPend !== bPend) return bPend - aPend;
-        return String(a.cliente_nome ?? "").localeCompare(String(b.cliente_nome ?? ""));
+        return clienteCmp(a, b);
       }
       if (ordenar === "BOM_PARA_DESC") {
         if (aTime !== bTime) return bTime - aTime;
         if (aPend !== bPend) return bPend - aPend;
-        return String(a.cliente_nome ?? "").localeCompare(String(b.cliente_nome ?? ""));
+        return clienteCmp(a, b);
       }
       if (ordenar === "DIAS_ASC") {
         if (aDias !== bDias) return aDias - bDias;
         if (aPend !== bPend) return bPend - aPend;
-        return String(a.cliente_nome ?? "").localeCompare(String(b.cliente_nome ?? ""));
+        return clienteCmp(a, b);
       }
       if (ordenar === "PENDENTE_DESC") {
         if (aPend !== bPend) return bPend - aPend;
         if (aTime !== bTime) return aTime - bTime;
-        return String(a.cliente_nome ?? "").localeCompare(String(b.cliente_nome ?? ""));
+        return clienteCmp(a, b);
       }
       return 0;
     });
@@ -341,6 +351,7 @@ export default function FinanceiroReceber() {
               value={ordenar}
               onChange={(e) => setOrdenar(e.target.value as Ordenar)}
             >
+              <option value="CLIENTE_ASC">Cliente (A → Z)</option>
               <option value="BOM_PARA_ASC">Bom para (mais cedo → mais tarde)</option>
               <option value="BOM_PARA_DESC">Bom para (mais tarde → mais cedo)</option>
               <option value="DIAS_ASC">Dias (D-1, D-2, D-3… crescente)</option>

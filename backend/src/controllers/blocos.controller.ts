@@ -8,8 +8,10 @@ import { AuthenticatedRequest } from "../middleware/auth.middleware";
    Helpers
    ========================================================= */
 
-const gerarCodigo = (clienteId: number) =>
-  `B${clienteId}-${Date.now().toString(36).toUpperCase()}`;
+/** Gera código único e legível para conferência: B{cliente_id}-{sequencial} (ex.: B2157-1, B2157-2) */
+function gerarCodigoSequencial(clienteId: number, nextSeq: number) {
+  return `B${clienteId}-${nextSeq}`;
+}
 
 const TIPOS_SISTEMICOS = [
   "PEDIDO",
@@ -95,31 +97,29 @@ const addLancamentoSchema = z.object({
 export const createBloco = async (req: Request, res: Response) => {
   try {
     const { cliente_id, codigo, observacao } = createBlocoSchema.parse(req.body);
-    const finalCodigo = codigo ?? gerarCodigo(cliente_id);
 
-    // garante 1 aberto por cliente
-    const aberto = await pool
-      .request()
-      .input("cliente_id", sql.Int, cliente_id)
-      .query(
-        `SELECT TOP 1 id FROM blocos WHERE cliente_id=@cliente_id AND status='ABERTO' ORDER BY id DESC;`
-      );
-    if (aberto.recordset.length) {
-      return res.status(409).json({
-        message: "Já existe um bloco ABERTO para este cliente",
-        bloco_aberto_id: aberto.recordset[0].id,
-      });
-    }
-
-    const tx = pool.transaction();
+    const tx = new sql.Transaction(pool);
     await tx.begin();
 
     try {
-      // 1) cria o bloco
-      const result = await tx
-        .request()
+      const finalCodigo =
+        codigo ??
+        (() => {
+          const seqReq = new sql.Request(tx).input("cliente_id", sql.Int, cliente_id);
+          return seqReq
+            .query("SELECT COUNT(*) + 1 AS next_seq FROM dbo.blocos WHERE cliente_id = @cliente_id")
+            .then((r) => {
+              const nextSeq = Number(r.recordset[0]?.next_seq ?? 1);
+              return gerarCodigoSequencial(cliente_id, nextSeq);
+            });
+        })();
+
+      const codigoFinal = typeof finalCodigo === "string" ? finalCodigo : await finalCodigo;
+
+      // 1) cria o bloco (permite múltiplos blocos abertos por cliente; código sequencial por cliente para conferência)
+      const result = await new sql.Request(tx)
         .input("cliente_id", sql.Int, cliente_id)
-        .input("codigo", sql.VarChar(50), finalCodigo)
+        .input("codigo", sql.VarChar(50), codigoFinal)
         .input("observacao", sql.VarChar(sql.MAX), observacao ?? null)
         .query(
           `INSERT INTO blocos (cliente_id, codigo, observacao, status, aberto_em)
@@ -135,8 +135,7 @@ export const createBloco = async (req: Request, res: Response) => {
       };
 
       // 2) último bloco FECHADO do cliente
-      const lastClosed = await tx
-        .request()
+      const lastClosed = await new sql.Request(tx)
         .input("cliente_id", sql.Int, cliente_id)
         .query(
           `SELECT TOP 1 id
@@ -149,8 +148,7 @@ export const createBloco = async (req: Request, res: Response) => {
         const blocoFechadoId = Number(lastClosed.recordset[0].id);
 
         // SALDO DO BLOCO (ignora CANCELADO) → SAÍDA + / ENTRADA −
-        const saldoRS = await tx
-          .request()
+        const saldoRS = await new sql.Request(tx)
           .input("bid", sql.Int, blocoFechadoId)
           .query(
             `SELECT
@@ -169,8 +167,7 @@ export const createBloco = async (req: Request, res: Response) => {
         // 3) se houver saldo a carregar, cria "SALDO ANTERIOR" no novo bloco
         if (saldoAnterior !== 0) {
           const sentido = saldoAnterior > 0 ? "SAIDA" : "ENTRADA";
-          await tx
-            .request()
+          await new sql.Request(tx)
             .input("bloco_id", sql.Int, novoBloco.id)
             .input("tipo_recebimento", sql.VarChar(30), "SALDO ANTERIOR")
             .input("valor", sql.Decimal(18, 2), Math.abs(saldoAnterior))
@@ -203,8 +200,16 @@ export const createBloco = async (req: Request, res: Response) => {
     if (error instanceof z.ZodError) {
       return res.status(400).json({ message: "Erro de validação", errors: error.errors });
     }
-    if (error?.number === 2627) {
-      return res.status(409).json({ message: "Já existe um bloco ABERTO com este código para o cliente" });
+    const errNum = error?.number ?? error?.originalError?.number;
+    if (errNum === 2627 || errNum === 2601) {
+      const isUnicoAberto =
+        String(error?.message ?? "").includes("IXU_blocos_cliente_unico_aberto") ||
+        String(error?.originalError?.message ?? "").includes("IXU_blocos_cliente_unico_aberto");
+      return res.status(409).json({
+        message: isUnicoAberto
+          ? "A base de dados ainda exige apenas um bloco aberto por cliente. Execute o script SQL em backend/scripts/drop-IXU_blocos_cliente_unico_aberto.sql no SQL Server para permitir múltiplos blocos abertos."
+          : "Código de bloco duplicado para este cliente.",
+      });
     }
     console.error("Erro ao criar bloco:", error);
     res.status(500).json({ message: "Erro interno no servidor" });
@@ -640,7 +645,8 @@ export const listBlocos = async (req: Request, res: Response) => {
     const rs = await pageReq.query(
       `SELECT
          b.id, b.codigo, b.status, b.cliente_id, c.nome_fantasia AS cliente_nome,
-         b.aberto_em, b.fechado_em, b.observacao
+         b.aberto_em, b.fechado_em, b.observacao,
+         (SELECT COUNT(*) FROM blocos b2 WHERE b2.cliente_id = b.cliente_id AND b2.id <= b.id) AS sequencial_cliente
        FROM blocos b
        LEFT JOIN clientes c ON c.id = b.cliente_id
        ${whereSql}
@@ -665,7 +671,8 @@ export const getBlocoById = async (req: Request, res: Response) => {
       .query(
         `SELECT
            b.id, b.codigo, b.status, b.cliente_id, c.nome_fantasia AS cliente_nome,
-           b.aberto_em, b.fechado_em, b.observacao
+           b.aberto_em, b.fechado_em, b.observacao,
+           (SELECT COUNT(*) FROM blocos b2 WHERE b2.cliente_id = b.cliente_id AND b2.id <= b.id) AS sequencial_cliente
          FROM blocos b
          LEFT JOIN clientes c ON c.id = b.cliente_id
          WHERE b.id = @id`
@@ -757,7 +764,7 @@ export const deleteLancamento = async (req: Request, res: Response) => {
       .input("id", sql.Int, lanc_id)
       .input("bloco_id", sql.Int, bloco_id)
       .query(`
-        SELECT id, bloco_id, bom_para, tipo_recebimento, valor
+        SELECT id, bloco_id, bom_para, tipo_recebimento, valor, status
         FROM dbo.bloco_lancamentos
         WHERE id=@id AND bloco_id=@bloco_id
       `);
@@ -765,8 +772,14 @@ export const deleteLancamento = async (req: Request, res: Response) => {
 
     const lanc = lancRS.recordset[0] as {
       id: number; bloco_id: number; bom_para: Date | null;
-      tipo_recebimento: string; valor: number;
+      tipo_recebimento: string; valor: number; status?: string;
     };
+
+    if (String(lanc.status || "").toUpperCase() !== "PENDENTE") {
+      return res.status(400).json({
+        message: "Só é possível excluir lançamentos com status PENDENTE.",
+      });
+    }
 
     const tx = new sql.Transaction(pool);
     await tx.begin();
@@ -864,4 +877,74 @@ export const listPedidosDoBloco = async (_req: Request, res: Response) => {
 
 export const unlinkPedido = async (_req: AuthenticatedRequest, res: Response) => {
   return res.status(501).json({ message: "Não alterado aqui. Mantenha seu handler original." });
+};
+
+/** Reabrir bloco (todos usuários autorizados). */
+export const reabrirBloco = async (req: Request, res: Response) => {
+  const { id } = req.params;
+  try {
+    const result = await pool
+      .request()
+      .input("id", sql.Int, +id)
+      .query(
+        `UPDATE blocos
+         SET status = 'ABERTO', fechado_em = NULL
+         OUTPUT INSERTED.*
+         WHERE id = @id AND status = 'FECHADO'`
+      );
+
+    if (!result.recordset.length) {
+      return res.status(404).json({ message: "Bloco não encontrado ou não está fechado" });
+    }
+    return res.json(result.recordset[0]);
+  } catch (error) {
+    console.error("Erro ao reabrir bloco:", error);
+    return res.status(500).json({ message: "Erro interno no servidor" });
+  }
+};
+
+/** Excluir bloco: qualquer usuário autorizado; bloqueado se houver lançamento já CONFIRMADO na conferência. */
+export const deleteBloco = async (req: Request, res: Response) => {
+  const bloco_id = +req.params.id;
+  try {
+    const blocoRS = await pool.request().input("id", sql.Int, bloco_id)
+      .query("SELECT id, status FROM dbo.blocos WHERE id = @id");
+    if (!blocoRS.recordset.length) {
+      return res.status(404).json({ message: "Bloco não encontrado" });
+    }
+
+    const confirmadoRS = await pool
+      .request()
+      .input("bloco_id", sql.Int, bloco_id)
+      .query(`
+        SELECT TOP 1 fc.id
+        FROM dbo.financeiro_conferencia fc
+        INNER JOIN dbo.bloco_lancamentos bl ON bl.id = fc.ref_id
+        WHERE fc.ref_tipo = 'BLOCO_LANC' AND fc.status = 'CONFIRMADO' AND bl.bloco_id = @bloco_id
+      `);
+    if (confirmadoRS.recordset.length) {
+      return res.status(409).json({
+        message: "Não é possível excluir o bloco: há lançamentos já confirmados na conferência. Desfaça a conferência desses itens antes.",
+      });
+    }
+
+    const tx = new sql.Transaction(pool);
+    await tx.begin();
+    try {
+      await new sql.Request(tx).input("bloco_id", sql.Int, bloco_id)
+        .query("DELETE FROM dbo.financeiro_titulos WHERE bloco_id = @bloco_id");
+      await new sql.Request(tx).input("bloco_id", sql.Int, bloco_id)
+        .query("DELETE FROM dbo.bloco_lancamentos WHERE bloco_id = @bloco_id");
+      await new sql.Request(tx).input("id", sql.Int, bloco_id)
+        .query("DELETE FROM dbo.blocos WHERE id = @id");
+      await tx.commit();
+      return res.status(204).send();
+    } catch (e) {
+      await tx.rollback();
+      throw e;
+    }
+  } catch (error) {
+    console.error("Erro ao excluir bloco:", error);
+    return res.status(500).json({ message: "Erro interno no servidor" });
+  }
 };

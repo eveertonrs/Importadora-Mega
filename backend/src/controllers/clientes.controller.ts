@@ -393,11 +393,7 @@ export const deleteCliente = async (req: Request, res: Response) => {
     const result = await pool
       .request()
       .input("id", +id)
-      .query(
-        `UPDATE clientes
-         SET status = 'INATIVO', atualizado_em = SYSUTCDATETIME()
-         WHERE id = @id`
-      );
+      .query(`DELETE FROM clientes WHERE id = @id`);
 
     if ((result.rowsAffected?.[0] ?? 0) === 0) {
       return res.status(404).json({ message: "Cliente não encontrado" });
@@ -405,7 +401,15 @@ export const deleteCliente = async (req: Request, res: Response) => {
 
     res.status(204).send();
   } catch (error) {
-    console.error("Erro ao inativar cliente:", error);
+    // erro 547 = violação de constraint (FK) no SQL Server
+    if ((error as any)?.number === 547) {
+      return res.status(409).json({
+        message:
+          "Este cliente possui registros vinculados (blocos, títulos ou outros lançamentos) e não pode ser excluído. Inative o cadastro em vez de excluir.",
+      });
+    }
+
+    console.error("Erro ao excluir cliente:", error);
     res.status(500).json({ message: "Erro interno no servidor" });
   }
 };

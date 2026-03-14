@@ -40,7 +40,7 @@ export default function PagamentoForm() {
     (async () => {
       try {
         const { data } = await api.get("/clientes", {
-          params: { search: debouncedSearch, limit: 10 },
+          params: { search: debouncedSearch, limit: 10, status: "ATIVO" },
         });
         if (cancel) return;
         const list: Cliente[] = (data?.data ?? data ?? []).slice(0, 10);

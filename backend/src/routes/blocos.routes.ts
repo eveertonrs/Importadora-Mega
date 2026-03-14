@@ -7,6 +7,8 @@ import {
   getBlocoSaldo,
   getBlocoSaldos,
   fecharBloco,
+  reabrirBloco,
+  deleteBloco,
   unlinkPedido,
   listBlocos,
   getBlocoById,
@@ -30,6 +32,10 @@ router.get("/:id/saldos", authorize("admin", "financeiro", "vendedor", "administ
 
 // Fechamento (permanece admin/financeiro)
 router.post("/:id/fechar", authorize("admin", "financeiro"), fecharBloco);
+// Reabrir: todos usuários autorizados
+router.patch("/:id/reabrir", authorize("admin", "financeiro", "vendedor", "administrativo"), reabrirBloco);
+// Excluir bloco: somente admin; bloqueado se houver lançamento CONFIRMADO na conferência
+router.delete("/:id", authorize("admin"), deleteBloco);
 
 // Pedidos
 router.get("/:id/pedidos", authorize("admin", "financeiro", "vendedor", "administrativo"), listPedidosDoBloco);
@@ -40,7 +46,7 @@ router.delete("/:id/pedidos/:pedido_id", authorize("admin"), unlinkPedido);
 // Lançamentos
 router.get("/:id/lancamentos", authorize("admin", "financeiro", "vendedor", "administrativo"), listLancamentosDoBloco);
 router.post("/:id/lancamentos", authorize("admin", "financeiro", "administrativo"), addLancamentoToBloco);
-// Excluir lançamento: somente admin (retirado "financeiro")
-router.delete("/:id/lancamentos/:lanc_id", authorize("admin"), deleteLancamento);
+// Excluir lançamento: qualquer um dos perfis (somente se status PENDENTE)
+router.delete("/:id/lancamentos/:lanc_id", authorize("admin", "financeiro", "vendedor", "administrativo"), deleteLancamento);
 
 export default router;

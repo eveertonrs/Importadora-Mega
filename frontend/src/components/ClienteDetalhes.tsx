@@ -20,6 +20,7 @@ type Doc = {
   principal?: boolean;
   percentual_nf?: number | null;
   tipo_nota?: "MEIA" | "INTEGRAL";
+  nome?: string | null;
 };
 
 type TranspVinculada = {
@@ -476,72 +477,84 @@ export default function ClienteDetalhes() {
         {/* Coluna direita */}
         <div className="space-y-6">
           {/* Documentos fiscais */}
-          <div className="rounded-2xl border bg-white p-4 shadow-sm">
-            <div className="mb-3 flex items-center justify-between">
-              <h3 className="text-sm font-medium text-slate-600">Documentos fiscais</h3>
-              <Link to={`/clientes/${cli.id}/documentos`} className="text-xs rounded border px-2 py-1 hover:bg-slate-50">
-                + adicionar / editar
+          <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+            <div className="mb-4 flex items-center justify-between">
+              <h3 className="text-base font-semibold text-slate-800">Documentos fiscais</h3>
+              <Link
+                to={`/clientes/${cli.id}/documentos`}
+                className="rounded-xl bg-slate-100 px-3 py-2 text-sm font-medium text-slate-700 hover:bg-slate-200 transition-colors"
+              >
+                + Adicionar / editar
               </Link>
             </div>
 
-            <div className="overflow-hidden rounded border">
-              <table className="w-full text-sm">
-                <thead className="bg-slate-50">
-                  <tr>
-                    <th className="border p-2">Tipo</th>
-                    <th className="border p-2">Número</th>
-                    <th className="border p-2">Principal</th>
-                    <th className="border p-2">Percentual</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {docsLoading && (
-                    <tr>
-                      <td colSpan={4} className="p-3 text-center text-slate-500">
-                        Carregando…
-                      </td>
-                    </tr>
-                  )}
-                  {!docsLoading && docs.length === 0 && (
-                    <tr>
-                      <td colSpan={4} className="p-3 text-center text-slate-400">
-                        Nenhum documento
-                      </td>
-                    </tr>
-                  )}
-                  {!docsLoading &&
-                    docs.map((d) => (
-                      <tr key={d.id}>
-                        <td className="border p-2">{d.doc_tipo}</td>
-                        <td className="border p-2">
-                          <button
-                            className="underline decoration-1 underline-offset-2 hover:text-blue-700"
-                            title="Copiar"
-                            onClick={() => copy(onlyDigits(d.doc_numero))}
-                          >
-                            {formatDoc(d.doc_tipo, d.doc_numero)}
-                          </button>
-                        </td>
-                        <td className="border p-2">
-                          <span
-                            className={
-                              "inline-flex items-center rounded-full px-2 py-0.5 text-[11px] ring-1 " +
-                              (d.principal
-                                ? "bg-emerald-50 text-emerald-700 ring-emerald-200"
-                                : "bg-slate-50 text-slate-600 ring-slate-200")
-                            }
-                          >
-                            {d.principal ? "SIM" : "NÃO"}
+            {docsLoading && (
+              <div className="rounded-xl bg-slate-50 py-8 text-center text-sm text-slate-500">
+                Carregando…
+              </div>
+            )}
+
+            {!docsLoading && docs.length === 0 && (
+              <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50/50 py-8 text-center text-sm text-slate-500">
+                Nenhum documento cadastrado.
+                <Link to={`/clientes/${cli.id}/documentos`} className="ml-1 text-blue-600 hover:underline">
+                  Adicionar
+                </Link>
+              </div>
+            )}
+
+            {!docsLoading && docs.length > 0 && (
+              <ul className="space-y-3">
+                {docs.map((d) => {
+                  const nomeExibido = (d as any).nome ?? d.nome ?? "";
+                  const isPrincipal = !!d.principal;
+                  return (
+                    <li
+                      key={d.id}
+                      className={`rounded-xl border p-4 transition-colors ${
+                        isPrincipal
+                          ? "border-amber-400 bg-amber-50/80"
+                          : "border-slate-200 bg-slate-50/40 hover:bg-slate-50"
+                      } ${isPrincipal ? "ring-1 ring-amber-200" : ""}`}
+                    >
+                      <div className="flex flex-wrap items-start justify-between gap-3">
+                        <div className="min-w-0 flex-1 space-y-1">
+                          <div className="flex flex-wrap items-center gap-2">
+                            <span className="font-medium text-slate-800">
+                              {nomeExibido.trim() || "— Sem nome"}
+                            </span>
+                            {isPrincipal && (
+                              <span className="inline-flex rounded-full bg-amber-200/80 px-2 py-0.5 text-[11px] font-semibold text-amber-900">
+                                Principal
+                              </span>
+                            )}
+                          </div>
+                          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-slate-600">
+                            <span>{d.doc_tipo}</span>
+                            <button
+                              type="button"
+                              className="font-mono text-slate-700 underline underline-offset-2 hover:text-blue-700"
+                              title="Copiar número"
+                              onClick={() => copy(onlyDigits(d.doc_numero))}
+                            >
+                              {formatDoc(d.doc_tipo, d.doc_numero)}
+                            </button>
+                            {typeof d.percentual_nf === "number" && (
+                              <span className="text-slate-500">{d.percentual_nf}%</span>
+                            )}
+                          </div>
+                        </div>
+                        {!isPrincipal && (
+                          <span className="rounded-full bg-slate-200 px-2 py-0.5 text-[11px] text-slate-600">
+                            Secundário
                           </span>
-                        </td>
-                        <td className="border p-2">
-                          {typeof d.percentual_nf === "number" ? `${d.percentual_nf}%` : "—"}
-                        </td>
-                      </tr>
-                    ))}
-                </tbody>
-              </table>
-            </div>
+                        )}
+                      </div>
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
           </div>
 
           {/* Transportadoras associadas */}

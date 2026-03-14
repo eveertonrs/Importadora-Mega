@@ -51,6 +51,33 @@ function StatusPill({ value }: { value?: StatusConferencia }) {
   return <Pill tone="amber">PENDENTE</Pill>;
 }
 
+/** Verde = SAÍDA (valor >= 0), Vermelho = ENTRADA (valor < 0) */
+function rowBgByValor(valor: number) {
+  return Number(valor ?? 0) >= 0 ? "bg-emerald-50/80" : "bg-rose-50/80";
+}
+
+function IconCheck({ className = "", size = 18 }: { className?: string; size?: number }) {
+  return (
+    <svg className={className} width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <polyline points="20 6 9 17 4 12" />
+    </svg>
+  );
+}
+function IconAlert({ className = "", size = 18 }: { className?: string; size?: number }) {
+  return (
+    <svg className={className} width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" /><line x1="12" y1="9" x2="12" y2="13" /><line x1="12" y1="17" x2="12.01" y2="17" />
+    </svg>
+  );
+}
+function IconUndo({ className = "", size = 18 }: { className?: string; size?: number }) {
+  return (
+    <svg className={className} width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+      <path d="M3 7v6h6" /><path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13" />
+    </svg>
+  );
+}
+
 export default function Conferencia() {
   const [date, setDate] = useState<string>(
     new Date().toISOString().slice(0, 10)
@@ -132,6 +159,14 @@ export default function Conferencia() {
           .some((s) => s.includes(q))
       );
     }
+    // Agrupar por cliente e ordenar alfabeticamente (nomes um em seguida do outro)
+    rows.sort((a, b) => {
+      const nomeA = (a.cliente_nome || "").trim().toLowerCase();
+      const nomeB = (b.cliente_nome || "").trim().toLowerCase();
+      const cmp = nomeA.localeCompare(nomeB, "pt-BR");
+      if (cmp !== 0) return cmp;
+      return (a.origem_id ?? a.id) - (b.origem_id ?? b.id);
+    });
     return rows;
   }, [
     itens,
@@ -419,20 +454,18 @@ export default function Conferencia() {
                 />
               </th>
               <th className="p-2 border text-left">Cliente</th>
-              <th className="p-2 border text-left">Origem</th>
               <th className="p-2 border text-left">Tipo</th>
               <th className="p-2 border text-left">Nº Doc</th>
               <th className="p-2 border text-left">Bom para</th>
               <th className="p-2 border text-right">Valor</th>
               <th className="p-2 border text-left">Conf.</th>
-              <th className="p-2 border text-left">Negócio</th>
               <th className="p-2 border text-left">Ações</th>
             </tr>
           </thead>
           <tbody>
             {loading && (
               <tr>
-                <td className="p-6 text-center" colSpan={10}>
+                <td className="p-6 text-center" colSpan={8}>
                   Carregando…
                 </td>
               </tr>
@@ -441,7 +474,7 @@ export default function Conferencia() {
               <tr>
                 <td
                   className="p-6 text-center text-slate-500"
-                  colSpan={10}
+                  colSpan={8}
                 >
                   Sem lançamentos
                 </td>
@@ -449,10 +482,11 @@ export default function Conferencia() {
             )}
             {filtered.map((r) => {
               const selectedRow = selected.has(keyOf(r));
+              const rowBg = rowBgByValor(Number(r.valor ?? 0));
               return (
                 <tr
                   key={`${r.id}-${r.origem}-${r.origem_id}`}
-                  className={`border-t ${selectedRow ? "bg-blue-50/40" : ""}`}
+                  className={`border-t ${rowBg} ${selectedRow ? "bg-blue-50/40" : ""}`}
                 >
                   <td className="p-2 border text-center">
                     <input
@@ -470,11 +504,6 @@ export default function Conferencia() {
                     </div>
                     <div className="text-xs text-slate-500">#{r.cliente_id}</div>
                   </td>
-                  <td className="p-2 border">
-                    {r.origem === "BLOCO_LANC" && <Pill tone="violet">Lançamento</Pill>}
-                    {r.origem === "TITULO" && <Pill tone="blue">Título</Pill>}
-                    {r.origem === "BAIXA" && <Pill tone="slate">Baixa</Pill>}
-                  </td>
                   <td className="p-2 border">{r.tipo}</td>
                   <td className="p-2 border">{r.numero_doc || "-"}</td>
                   <td className="p-2 border">{DATE(r.bom_para)}</td>
@@ -484,29 +513,37 @@ export default function Conferencia() {
                   <td className="p-2 border">
                     <StatusPill value={r.status_conferencia || "PENDENTE"} />
                   </td>
-                  <td className="p-2 border">{r.status_negocio || "-"}</td>
                   <td className="p-2 border">
-                    <div className="flex flex-wrap items-center gap-2">
+                    <div className="flex flex-wrap items-center gap-1">
                       <button
+                        type="button"
                         onClick={() => doConfirmar([r])}
-                        className="px-2 py-1 rounded-lg bg-emerald-600 text-white text-xs hover:bg-emerald-700"
+                        className="p-1.5 rounded-lg bg-emerald-600 text-white hover:bg-emerald-700"
+                        title="Confirmar"
+                        aria-label="Confirmar"
                       >
-                        Confirmar
+                        <IconCheck size={16} />
                       </button>
                       <button
+                        type="button"
                         onClick={() => {
                           setSelected(new Set([keyOf(r)]));
                           setDivModalOpen(true);
                         }}
-                        className="px-2 py-1 rounded-lg border text-rose-700 text-xs hover:bg-rose-50"
+                        className="p-1.5 rounded-lg border text-rose-700 hover:bg-rose-50"
+                        title="Divergir"
+                        aria-label="Divergir"
                       >
-                        Divergir…
+                        <IconAlert size={16} />
                       </button>
                       <button
+                        type="button"
                         onClick={() => doDesfazer([r])}
-                        className="px-2 py-1 rounded-lg border text-xs hover:bg-slate-50"
+                        className="p-1.5 rounded-lg border hover:bg-slate-50"
+                        title="Desfazer"
+                        aria-label="Desfazer"
                       >
-                        Desfazer
+                        <IconUndo size={16} />
                       </button>
                     </div>
                   </td>

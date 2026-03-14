@@ -73,7 +73,7 @@ export default function Clientes() {
   const nav = useNavigate();
 
   const [search, setSearch] = useState("");
-  const [status, setStatus] = useState<"" | "ATIVO" | "INATIVO">("");
+  const [status, setStatus] = useState<"" | "ATIVO" | "INATIVO">("ATIVO");
   const [tabela, setTabela] = useState<string>("");
 
   const [rows, setRows] = useState<Cliente[]>([]);
@@ -85,10 +85,31 @@ export default function Clientes() {
 
   const [openMenuId, setOpenMenuId] = useState<number | null>(null);
   const [tabelas, setTabelas] = useState<string[]>([]);
+  /** Cliente selecionado para exclusão: exibe modal de confirmação antes de deletar */
+  const [clienteToExcluir, setClienteToExcluir] = useState<Cliente | null>(null);
+  const [excluindo, setExcluindo] = useState(false);
 
   const debounceMs = 400;
   const timerRef = useRef<number | null>(null);
   const debounced = useMemo(() => search.trim(), [search]);
+
+  // papel do usuário (para restringir exclusão a admin)
+  const role: string | undefined = useMemo(() => {
+    try {
+      const keys = ["auth_user", "auth", "user", "megafin:auth"];
+      for (const k of keys) {
+        const raw = localStorage.getItem(k);
+        if (!raw) continue;
+        const obj = JSON.parse(raw);
+        if (obj?.user?.permissao) return String(obj.user.permissao).toLowerCase();
+        if (obj?.permissao) return String(obj.permissao).toLowerCase();
+      }
+    } catch {
+      /* ignore */
+    }
+    return undefined;
+  }, []);
+  const isAdmin = role === "admin";
 
   /* Combos tabela */
   useEffect(() => {
@@ -161,13 +182,27 @@ export default function Clientes() {
     }
   }
 
-  async function excluir(c: Cliente) {
-    if (!confirm(`Excluir o cliente "${c.nome_fantasia}"?\nEsta ação não pode ser desfeita.`)) return;
+  /** Abre o modal de confirmação de exclusão (mensagem sempre visível na tela) */
+  function pedirConfirmacaoExclusao(c: Cliente) {
+    setClienteToExcluir(c);
+  }
+
+  async function confirmarExcluir() {
+    if (!clienteToExcluir) return;
+    setExcluindo(true);
     try {
-      await api.delete(`/clientes/${c.id}`);
+      await api.delete(`/clientes/${clienteToExcluir.id}`);
+      setClienteToExcluir(null);
       await load();
     } catch (e: any) {
-      alert(e?.response?.data?.message || "Falha ao excluir.");
+      const status = e?.response?.status;
+      const msg =
+        status === 403
+          ? "Apenas administradores podem excluir clientes."
+          : e?.response?.data?.message || "Falha ao excluir.";
+      alert(msg);
+    } finally {
+      setExcluindo(false);
     }
   }
 
@@ -324,7 +359,8 @@ export default function Clientes() {
                 onOpen={() => setOpenMenuId(c.id)}
                 onClose={() => setOpenMenuId(null)}
                 onToggle={() => toggleStatus(c)}
-                onExcluir={() => excluir(c)}
+                onExcluir={() => pedirConfirmacaoExclusao(c)}
+                canExcluir={isAdmin}
               />
             ))}
         </ul>
@@ -355,6 +391,50 @@ export default function Clientes() {
           </button>
         </div>
       </section>
+
+      {/* Modal: confirmar exclusão permanente (só exclui do banco após confirmar) */}
+      {clienteToExcluir && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+          onClick={() => !excluindo && setClienteToExcluir(null)}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="excluir-modal-title"
+        >
+          <div
+            className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-6 shadow-xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <h2 id="excluir-modal-title" className="text-lg font-semibold text-slate-800">
+              Excluir cliente do banco de dados?
+            </h2>
+            <p className="mt-2 text-slate-600">
+              O cliente <strong>"{clienteToExcluir.nome_fantasia}"</strong> será removido permanentemente do banco de dados. Esta ação não pode ser desfeita.
+            </p>
+            <p className="mt-1 text-sm text-slate-500">
+              Para apenas ocultar da lista, use "Inativar" no menu do cliente.
+            </p>
+            <div className="mt-6 flex justify-end gap-3">
+              <button
+                type="button"
+                disabled={excluindo}
+                onClick={() => setClienteToExcluir(null)}
+                className="rounded-xl border border-slate-300 px-4 py-2 text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+              >
+                Cancelar
+              </button>
+              <button
+                type="button"
+                disabled={excluindo}
+                onClick={confirmarExcluir}
+                className="rounded-xl bg-rose-600 px-4 py-2 text-white hover:bg-rose-700 disabled:opacity-50"
+              >
+                {excluindo ? "Excluindo…" : "Excluir permanentemente"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -369,6 +449,7 @@ function RowItem({
   onClose,
   onToggle,
   onExcluir,
+  canExcluir,
 }: {
   c: Cliente;
   isOpen: boolean;
@@ -376,6 +457,7 @@ function RowItem({
   onClose: () => void;
   onToggle: () => void;
   onExcluir: () => void;
+  canExcluir: boolean;
 }) {
   const btnRef = useRef<HTMLButtonElement>(null);
   const ativo = (c as any).ativo === true || c.status === "ATIVO";
@@ -480,9 +562,11 @@ function RowItem({
               <MenuItem onClick={() => { onClose(); onToggle(); }} icon={(c as any).ativo || c.status === "ATIVO" ? "⏸️" : "▶️"} tone="amber">
                 {(c as any).ativo || c.status === "ATIVO" ? "Inativar" : "Reativar"}
               </MenuItem>
-              <MenuItem onClick={() => { onClose(); onExcluir(); }} icon="🗑️" tone="red">
-                Excluir
-              </MenuItem>
+              {canExcluir && (
+                <MenuItem onClick={() => { onClose(); onExcluir(); }} icon="🗑️" tone="red">
+                  Excluir
+                </MenuItem>
+              )}
               <MenuItem asLink to={`/blocos?cliente_id=${c.id}`} onClick={onClose} icon="🧩" tone="emerald">
                 Blocos
               </MenuItem>
