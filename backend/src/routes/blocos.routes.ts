@@ -31,7 +31,7 @@ router.get("/:id/saldo", authorize("admin", "financeiro", "vendedor", "administr
 router.get("/:id/saldos", authorize("admin", "financeiro", "vendedor", "administrativo"), getBlocoSaldos);
 
 // Fechamento (permanece admin/financeiro)
-router.post("/:id/fechar", authorize("admin", "financeiro"), fecharBloco);
+router.post("/:id/fechar", authorize("admin", "financeiro", "administrativo"), fecharBloco);
 // Reabrir: todos usuários autorizados
 router.patch("/:id/reabrir", authorize("admin", "financeiro", "vendedor", "administrativo"), reabrirBloco);
 // Excluir bloco: somente admin; bloqueado se houver lançamento CONFIRMADO na conferência

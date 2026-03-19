@@ -400,6 +400,7 @@ export const conferenciaDiaria = async (req: Request, res: Response) => {
             b.cliente_id,
             c.nome_fantasia                 AS cliente_nome,
             bl.tipo_recebimento             AS tipo,
+            bl.sentido                      AS sentido,
             bl.numero_referencia            AS numero_doc,
             CAST(NULL AS date)              AS bom_para,
             CASE WHEN bl.sentido = 'ENTRADA' THEN -bl.valor ELSE bl.valor END AS valor,
@@ -421,14 +422,21 @@ export const conferenciaDiaria = async (req: Request, res: Response) => {
             t.cliente_id,
             c.nome_fantasia                  AS cliente_nome,
             t.tipo                           AS tipo,
+            COALESCE(pp.tipo, 'SAIDA')       AS sentido,
             t.numero_doc                     AS numero_doc,
             CAST(t.bom_para AS date)         AS bom_para,
-            -t.valor_bruto                   AS valor,
+            CASE WHEN COALESCE(pp.tipo, 'SAIDA') = 'ENTRADA' THEN -t.valor_bruto ELSE t.valor_bruto END AS valor,
             t.status                         AS status_negocio,
             t.bloco_id                       AS bloco_id,
             t.id                             AS titulo_id
           FROM dbo.financeiro_titulos t
           LEFT JOIN dbo.clientes c ON c.id = t.cliente_id
+          OUTER APPLY (
+            SELECT TOP 1 UPPER(p.tipo) AS tipo
+            FROM dbo.pedido_parametros p
+            WHERE UPPER(p.descricao) = UPPER(t.tipo)
+            ORDER BY p.ativo DESC, p.id DESC
+          ) pp
           WHERE (
                   CAST(t.bom_para AS date) = @dia
                OR CAST(t.created_at AS date) = @dia

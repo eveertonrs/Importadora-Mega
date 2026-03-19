@@ -51,8 +51,11 @@ function StatusPill({ value }: { value?: StatusConferencia }) {
   return <Pill tone="amber">PENDENTE</Pill>;
 }
 
-/** Verde = SAÍDA (valor >= 0), Vermelho = ENTRADA (valor < 0) */
-function rowBgByValor(valor: number) {
+/** Regra de cor: ENTRADA = vermelho, SAÍDA = verde (fallback: sinal do valor). */
+function rowBgByNatureza(sentido?: string | null, valor?: number) {
+  const s = String(sentido || "").toUpperCase();
+  if (s === "ENTRADA") return "bg-rose-50/80";
+  if (s === "SAIDA" || s === "SAÍDA") return "bg-emerald-50/80";
   return Number(valor ?? 0) >= 0 ? "bg-emerald-50/80" : "bg-rose-50/80";
 }
 
@@ -482,7 +485,7 @@ export default function Conferencia() {
             )}
             {filtered.map((r) => {
               const selectedRow = selected.has(keyOf(r));
-              const rowBg = rowBgByValor(Number(r.valor ?? 0));
+              const rowBg = rowBgByNatureza((r as any).sentido, Number(r.valor ?? 0));
               return (
                 <tr
                   key={`${r.id}-${r.origem}-${r.origem_id}`}

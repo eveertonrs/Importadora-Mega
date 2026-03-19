@@ -60,6 +60,7 @@ export type ConferenciaItem = {
   cliente_id: number;
   cliente_nome?: string | null;
   tipo: string;
+  sentido?: "ENTRADA" | "SAIDA" | string;
   numero_doc?: string | null;
   bom_para?: string | null;
   valor: number;

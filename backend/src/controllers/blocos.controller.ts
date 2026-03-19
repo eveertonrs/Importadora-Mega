@@ -781,6 +781,79 @@ export const deleteLancamento = async (req: Request, res: Response) => {
       });
     }
 
+    // Regra adicional: se o lançamento já foi CONFIRMADO na conferência, não pode excluir.
+    // Conferência de lançamentos imediatos usa ref_tipo='BLOCO_LANC' e ref_id=lanc.id.
+    const confLancRS = await pool
+      .request()
+      .input("lanc_id", sql.Int, lanc.id)
+      .query(`
+        SELECT TOP 1 id
+        FROM dbo.financeiro_conferencia
+        WHERE ref_tipo = 'BLOCO_LANC'
+          AND ref_id = @lanc_id
+          AND status = 'CONFIRMADO'
+      `);
+    if (confLancRS.recordset.length) {
+      return res.status(409).json({
+        message:
+          "Não é possível excluir: este lançamento já foi confirmado na conferência. Desfaça a conferência antes de excluir.",
+      });
+    }
+
+    // Para lançamentos com bom_para (que geram título), a confirmação pode ocorrer como ref_tipo='TITULO'.
+    // Então também bloqueamos exclusão se houver título vinculado já confirmado.
+    if (lanc.bom_para) {
+      let confTituloRS: { recordset: any[] } | null = null;
+      try {
+        confTituloRS = await pool
+          .request()
+          .input("lanc_id", sql.Int, lanc.id)
+          .query(`
+            SELECT TOP 1 fc.id
+            FROM dbo.financeiro_conferencia fc
+            INNER JOIN dbo.financeiro_titulos t ON t.id = fc.ref_id
+            WHERE fc.ref_tipo = 'TITULO'
+              AND fc.status = 'CONFIRMADO'
+              AND t.bloco_lanc_id = @lanc_id
+          `);
+      } catch (err: any) {
+        // fallback para schema antigo (sem coluna bloco_lanc_id)
+        const n = err?.number ?? err?.originalError?.number;
+        const msg = String(err?.message || "");
+        const invalidColumn = n === 207 || /Invalid column name/i.test(msg) || /bloco_lanc_id/i.test(msg);
+        if (!invalidColumn) throw err;
+
+        confTituloRS = await pool
+          .request()
+          .input("bloco_id", sql.Int, lanc.bloco_id)
+          .input("tipo", sql.VarChar(30), String(lanc.tipo_recebimento || "").toUpperCase())
+          .input("valor", sql.Decimal(18, 2), Number(lanc.valor || 0))
+          .input("bom_para", sql.Date, lanc.bom_para ? new Date(lanc.bom_para) : null)
+          .query(`
+            SELECT TOP 1 fc.id
+            FROM dbo.financeiro_conferencia fc
+            INNER JOIN dbo.financeiro_titulos t ON t.id = fc.ref_id
+            WHERE fc.ref_tipo = 'TITULO'
+              AND fc.status = 'CONFIRMADO'
+              AND t.bloco_id = @bloco_id
+              AND UPPER(t.tipo) = @tipo
+              AND ABS(t.valor_bruto - @valor) < 0.01
+              AND (
+                    (@bom_para IS NULL AND t.bom_para IS NULL)
+                 OR (@bom_para IS NOT NULL AND t.bom_para IS NOT NULL
+                     AND CAST(t.bom_para AS date) = CAST(@bom_para AS date))
+              )
+          `);
+      }
+
+      if (confTituloRS?.recordset?.length) {
+        return res.status(409).json({
+          message:
+            "Não é possível excluir: o título financeiro vinculado a este lançamento já foi confirmado na conferência. Desfaça a conferência antes de excluir.",
+        });
+      }
+    }
+
     const tx = new sql.Transaction(pool);
     await tx.begin();
 
