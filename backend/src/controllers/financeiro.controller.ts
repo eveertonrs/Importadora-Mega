@@ -455,7 +455,7 @@ export const conferenciaDiaria = async (req: Request, res: Response) => {
           UNION ALL
           SELECT * FROM tit
         ) x
-        LEFT JOIN dbo.financeiro_conferencia fc
+        INNER JOIN dbo.financeiro_conferencia fc
           ON fc.ref_tipo = x.origem AND fc.ref_id = x.origem_id
         ORDER BY x.data_evento, x.origem, x.origem_id
       `);
