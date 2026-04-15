@@ -402,7 +402,7 @@ export const conferenciaDiaria = async (req: Request, res: Response) => {
             bl.tipo_recebimento             AS tipo,
             bl.sentido                      AS sentido,
             bl.numero_referencia            AS numero_doc,
-            CAST(NULL AS date)              AS bom_para,
+            CAST(bl.bom_para AS date)       AS bom_para,
             CASE WHEN bl.sentido = 'ENTRADA' THEN -bl.valor ELSE bl.valor END AS valor,
             bl.status                       AS status_negocio,
             bl.bloco_id                     AS bloco_id,
@@ -411,14 +411,13 @@ export const conferenciaDiaria = async (req: Request, res: Response) => {
           JOIN dbo.blocos b ON b.id = bl.bloco_id
           LEFT JOIN dbo.clientes c ON c.id = b.cliente_id
           WHERE CAST(bl.data_lancamento AS date) = @dia
-            AND bl.bom_para IS NULL
             AND (@cliente_id IS NULL OR b.cliente_id = @cliente_id)
         ),
         tit AS (
           SELECT
             t.id                             AS origem_id,
             'TITULO'                         AS origem,
-            COALESCE(CAST(t.bom_para AS date), CAST(t.created_at AS date)) AS data_evento,
+            COALESCE(CAST(bl.data_lancamento AS date), CAST(t.created_at AS date)) AS data_evento,
             t.cliente_id,
             c.nome_fantasia                  AS cliente_nome,
             t.tipo                           AS tipo,
@@ -431,6 +430,7 @@ export const conferenciaDiaria = async (req: Request, res: Response) => {
             t.id                             AS titulo_id
           FROM dbo.financeiro_titulos t
           LEFT JOIN dbo.clientes c ON c.id = t.cliente_id
+          LEFT JOIN dbo.bloco_lancamentos bl ON bl.id = t.bloco_lanc_id
           OUTER APPLY (
             SELECT TOP 1 UPPER(p.tipo) AS tipo
             FROM dbo.pedido_parametros p
@@ -438,9 +438,9 @@ export const conferenciaDiaria = async (req: Request, res: Response) => {
             ORDER BY p.ativo DESC, p.id DESC
           ) pp
           WHERE (
-                  CAST(t.bom_para AS date) = @dia
-               OR CAST(t.created_at AS date) = @dia
-                )
+                (t.bloco_lanc_id IS NOT NULL AND bl.id IS NOT NULL AND CAST(bl.data_lancamento AS date) = @dia)
+                OR (COALESCE(t.bloco_lanc_id, 0) = 0 AND CAST(t.created_at AS date) = @dia)
+              )
             AND (@cliente_id IS NULL OR t.cliente_id = @cliente_id)
         )
         SELECT

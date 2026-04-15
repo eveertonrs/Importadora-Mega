@@ -16,8 +16,16 @@ type ConferenciaItem = ConferenciaResult["itens"][number];
 
 const BRL = (n: number) =>
   Number(n || 0).toLocaleString("pt-BR", { style: "currency", currency: "BRL" });
-const DATE = (iso?: string | null) =>
-  iso ? new Date(iso).toLocaleDateString() : "-";
+const DATE = (iso?: string | null) => {
+  if (!iso) return "-";
+  const s = String(iso).trim();
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(s);
+  if (m) {
+    const [, y, mo, d] = m;
+    return `${d}/${mo}/${y}`;
+  }
+  return new Date(s).toLocaleDateString("pt-BR");
+};
 const keyOf = (it: Pick<ConferenciaItem, "origem" | "origem_id">) =>
   `${it.origem}:${it.origem_id}`;
 
