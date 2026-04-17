@@ -437,10 +437,8 @@ export const conferenciaDiaria = async (req: Request, res: Response) => {
             WHERE UPPER(p.descricao) = UPPER(t.tipo)
             ORDER BY p.ativo DESC, p.id DESC
           ) pp
-          WHERE (
-                (t.bloco_lanc_id IS NOT NULL AND bl.id IS NOT NULL AND CAST(bl.data_lancamento AS date) = @dia)
-                OR (COALESCE(t.bloco_lanc_id, 0) = 0 AND CAST(t.created_at AS date) = @dia)
-              )
+          WHERE COALESCE(t.bloco_lanc_id, 0) = 0
+            AND CAST(t.created_at AS date) = @dia
             AND (@cliente_id IS NULL OR t.cliente_id = @cliente_id)
         )
         SELECT
@@ -455,7 +453,7 @@ export const conferenciaDiaria = async (req: Request, res: Response) => {
           UNION ALL
           SELECT * FROM tit
         ) x
-        INNER JOIN dbo.financeiro_conferencia fc
+        LEFT JOIN dbo.financeiro_conferencia fc
           ON fc.ref_tipo = x.origem AND fc.ref_id = x.origem_id
         ORDER BY x.data_evento, x.origem, x.origem_id
       `);
